@@ -13,7 +13,7 @@ const parse = (text) => {
 
 test('быстрое добавление: дата, время и название', () => {
   assert.deepEqual(parse('завтра в 15 встреча с Аней'), {
-    title: 'Встреча с Аней', date: '2026-10-18', start: '15:00', end: '16:00', repeat: 'none', allDay: false, tag: null, matched: true,
+    title: 'Встреча с Аней', date: '2026-10-18', start: '15:00', end: '16:00', repeat: 'none', allDay: false, tag: null, priority: 0, matched: true,
   });
   assert.equal(parse('через 3 дня в 7 вечера кино').start, '19:00');
   assert.equal(parse('через 3 дня в 7 вечера кино').date, '2026-10-20');
@@ -62,6 +62,47 @@ test('быстрое добавление: метка категории', () =>
   assert.equal(r.title, 'Созвон');
   assert.equal(r.start, '10:00');
   assert.equal(parse('#учёба экзамен 20.12').tag, 'учёба');
+});
+
+test('быстрое добавление: задачи со сроком и важностью', () => {
+  const r = parse('сдать отчёт до пятницы 18:00 #работа !');
+  assert.equal(r.title, 'Сдать отчёт');
+  assert.equal(r.date, '2026-10-23');
+  assert.equal(r.start, '18:00');
+  assert.equal(r.priority, 1);
+  assert.equal(parse('купить подарок до 25.10').date, '2026-10-25');
+  assert.equal(parse('купить подарок до 25.10').title, 'Купить подарок');
+  assert.equal(parse('позвонить маме до 18').start, '18:00');
+  const cv = parse('отправить резюме до 25.10');
+  assert.equal(cv.date, '2026-10-25');
+  assert.equal(cv.start, null);
+  assert.equal(parse('эссе до 20.11 до 23:59').start, '23:59');
+  assert.equal(parse('встреча в 15.30').start, '15:30');
+  assert.equal(parse('оплатить счёт важно').priority, 1);
+  const slides = parse('к понедельнику подготовить слайды');
+  assert.equal(slides.date, '2026-10-19');
+  assert.equal(slides.title, 'Подготовить слайды');
+  assert.equal(parse('просто дело').priority, 0);
+});
+
+test('срок задачи берётся из связанного события', () => {
+  const ev = { id: 'e', date: '2026-10-20', start: '14:00', repeat: 'none' };
+  assert.deepEqual(c.taskDeadline({ eventId: 'e', due: '2026-10-01' }, ev), { date: '2026-10-20', time: '14:00' });
+  const weekly = { ...ev, repeat: 'weekly' };
+  assert.deepEqual(c.taskDeadline({ eventId: 'e', eventKey: '2026-10-27' }, weekly), { date: '2026-10-27', time: '14:00' });
+  // Событие удалено — остаётся сохранённый срок
+  assert.deepEqual(c.taskDeadline({ eventId: 'e', due: '2026-10-01', time: '09:00' }, undefined), { date: '2026-10-01', time: '09:00' });
+  assert.equal(c.taskDeadline({ due: null }, undefined), null);
+});
+
+test('нормализация задачи', () => {
+  assert.equal(c.normalizeTask({ title: 'x' }), null);
+  const t = c.normalizeTask({ id: 1, title: 'x', due: 'вчера', time: '10:00', done: 1, doneAt: 5, priority: 'yes' });
+  assert.equal(t.due, null);
+  assert.equal(t.time, null);
+  assert.equal(t.done, true);
+  assert.equal(t.doneAt, 5);
+  assert.equal(t.priority, 1);
 });
 
 test('обычный текст остаётся названием', () => {

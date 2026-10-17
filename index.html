@@ -11,6 +11,7 @@
   <link rel="apple-touch-icon" href="icon.svg">
   <link rel="stylesheet" href="style.css">
   <script src="core.js" defer></script>
+  <script src="tasks.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -72,11 +73,12 @@
           <button type="button" data-view="week">Неделя</button>
           <button type="button" data-view="day">День</button>
           <button type="button" data-view="agenda">Список</button>
+          <button type="button" data-view="tasks">Задачи<span class="badge" id="taskBadge" hidden></span></button>
         </div>
       </header>
 
       <form class="quick" id="quickForm" autocomplete="off">
-        <span class="quick-icon" aria-hidden="true">⚡</span>
+        <button type="button" class="quick-mode" id="quickMode" title="Что добавлять: событие или задачу (Tab в пустой строке)"></button>
         <input id="quickInput" placeholder="Быстро: «завтра в 15 встреча с Аней», «по пятницам в 19 спортзал #личное»" aria-label="Быстрое добавление">
         <span class="quick-preview" id="quickPreview"></span>
       </form>
@@ -130,6 +132,12 @@
         <div class="cal-picker" id="fCal" role="radiogroup" aria-label="Календарь"></div>
       </div>
 
+      <div class="field">
+        <span>Задачи к событию</span>
+        <div class="ev-tasks" id="evTasks"></div>
+        <input id="evTaskInput" class="ev-task-input" placeholder="＋ Что подготовить? Enter — добавить" autocomplete="off">
+      </div>
+
       <label class="field"><span>Заметки</span><textarea id="fNotes" rows="3" placeholder="Адрес, ссылка, детали…"></textarea></label>
 
       <div class="delete-choice" id="deleteChoice" hidden>
@@ -168,6 +176,40 @@
     </form>
   </dialog>
 
+  <dialog class="dialog" id="taskEditor">
+    <form id="taskForm" method="dialog">
+      <div class="dialog-head">
+        <input id="tTitle" class="title-input" placeholder="Что нужно сделать?" autocomplete="off">
+        <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+      </div>
+
+      <label class="field"><span>Связать с событием</span>
+        <select id="tEvent"></select>
+      </label>
+
+      <div class="field-row" id="tDueRow">
+        <label class="field"><span>Срок</span><input type="date" id="tDue"></label>
+        <label class="field"><span>Время (необязательно)</span><input type="time" id="tTime" step="300"></label>
+      </div>
+      <p class="muted task-hint" id="tLinkedHint" hidden></p>
+
+      <div class="field"><span>Календарь</span>
+        <div class="cal-picker" id="tCal" role="radiogroup" aria-label="Календарь"></div>
+      </div>
+
+      <label class="check"><input type="checkbox" id="tPriority"> Важная задача</label>
+
+      <label class="field"><span>Заметки</span><textarea id="tNotes" rows="3" placeholder="Детали, ссылки, подзадачи…"></textarea></label>
+
+      <div class="dialog-foot">
+        <button type="button" class="btn danger-text" id="btnDeleteTask">Удалить</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" data-close>Отмена</button>
+        <button type="submit" class="btn primary">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog class="dialog help" id="help">
     <div class="dialog-head">
       <h2>Горячие клавиши</h2>
@@ -179,6 +221,7 @@
       <dt><kbd>T</kbd></dt><dd>Сегодня</dd>
       <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Назад / вперёд</dd>
       <dt><kbd>M</kbd> <kbd>W</kbd> <kbd>D</kbd> <kbd>A</kbd></dt><dd>Месяц, неделя, день, список</dd>
+      <dt><kbd>З</kbd> (<kbd>P</kbd>)</dt><dd>Задачи</dd>
       <dt><kbd>1</kbd>…<kbd>9</kbd></dt><dd>Показать / скрыть календарь</dd>
       <dt><kbd>/</kbd></dt><dd>Поиск</dd>
       <dt><kbd>Esc</kbd></dt><dd>Закрыть</dd>
@@ -190,8 +233,9 @@
       <li><b>в 15, в 9:30, в 7 вечера, с 10 до 12, 14:00–15:30</b></li>
       <li><b>каждый день, по будням, по понедельникам, каждый месяц, каждый год</b></li>
       <li><b>#работа, #учёба, #личное</b> — календарь (можно начало названия: #раб)</li>
+      <li><b>до пятницы, к понедельнику, до 25.10, до 18:00</b> — срок задачи; <b>!</b> или <b>важно</b> — важная</li>
     </ul>
-    <p class="muted">Enter — сохранить сразу, Shift+Enter — открыть полную форму.</p>
+    <p class="muted">Enter — сохранить сразу, Shift+Enter — открыть полную форму. Кнопка слева в строке (или Tab в пустой строке) переключает «Событие / Задача»; строка, начинающаяся со слова «задача», всегда создаёт задачу.</p>
   </dialog>
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
