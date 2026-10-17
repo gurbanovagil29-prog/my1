@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Календарь</title>
+  <meta name="description" content="Удобный календарь на каждый день: быстрое добавление фразой, повторы, напоминания, работа офлайн.">
+  <meta name="theme-color" content="#4f6bed">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+  <script src="core.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="app" id="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <img src="icon.svg" alt="" width="28" height="28">
+        <span>Календарь</span>
+      </div>
+
+      <button class="btn primary create-btn" id="btnCreate" type="button">
+        <span aria-hidden="true">＋</span> Создать
+      </button>
+
+      <section class="mini" id="mini" aria-label="Мини-календарь"></section>
+
+      <section class="side-list" id="sideList" aria-label="Ближайшие события"></section>
+
+      <footer class="side-footer">
+        <button class="link-btn" id="btnTheme" type="button"></button>
+        <button class="link-btn" id="btnNotify" type="button"></button>
+        <details class="side-more">
+          <summary class="link-btn">Данные</summary>
+          <button class="link-btn" id="btnExportJson" type="button">Скачать резервную копию (.json)</button>
+          <button class="link-btn" id="btnExportIcs" type="button">Экспорт в .ics (Google, Apple, Outlook)</button>
+          <button class="link-btn" id="btnImport" type="button">Импорт из .json или .ics</button>
+          <input type="file" id="importFile" accept=".json,.ics,application/json,text/calendar" hidden>
+        </details>
+        <button class="link-btn" id="btnHelp" type="button">Горячие клавиши</button>
+      </footer>
+    </aside>
+    <div class="backdrop" id="backdrop"></div>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" id="btnMenu" type="button" aria-label="Меню">☰</button>
+        <button class="btn" id="btnToday" type="button">Сегодня</button>
+        <div class="nav-arrows">
+          <button class="icon-btn" id="btnPrev" type="button" aria-label="Назад">‹</button>
+          <button class="icon-btn" id="btnNext" type="button" aria-label="Вперёд">›</button>
+        </div>
+        <h1 class="title" id="title"></h1>
+
+        <div class="search">
+          <input type="search" id="search" placeholder="Поиск" autocomplete="off" aria-label="Поиск событий">
+          <div class="search-results" id="searchResults" hidden></div>
+        </div>
+
+        <div class="segmented" id="viewSwitch" role="tablist">
+          <button type="button" data-view="month">Месяц</button>
+          <button type="button" data-view="week">Неделя</button>
+          <button type="button" data-view="day">День</button>
+          <button type="button" data-view="agenda">Список</button>
+        </div>
+      </header>
+
+      <form class="quick" id="quickForm" autocomplete="off">
+        <span class="quick-icon" aria-hidden="true">⚡</span>
+        <input id="quickInput" placeholder="Быстро: «завтра в 15 встреча с Аней», «по пятницам в 19 спортзал»" aria-label="Быстрое добавление">
+        <span class="quick-preview" id="quickPreview"></span>
+      </form>
+
+      <section class="view" id="view"></section>
+    </main>
+  </div>
+
+  <dialog class="dialog" id="editor">
+    <form id="editorForm" method="dialog">
+      <div class="dialog-head">
+        <input id="fTitle" class="title-input" placeholder="Название" autocomplete="off">
+        <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+      </div>
+
+      <div class="field-row">
+        <label class="field"><span id="fDateLabel">Дата</span><input type="date" id="fDate" required></label>
+        <label class="check"><input type="checkbox" id="fAllDay"> Весь день</label>
+      </div>
+
+      <div class="field-row" id="timeRow">
+        <label class="field"><span>Начало</span><input type="time" id="fStart" step="300"></label>
+        <label class="field"><span>Конец</span><input type="time" id="fEnd" step="300"></label>
+      </div>
+
+      <div class="field-row">
+        <label class="field"><span>Повтор</span>
+          <select id="fRepeat"></select>
+        </label>
+        <label class="field" id="untilWrap"><span>Повторять до</span><input type="date" id="fUntil"></label>
+      </div>
+
+      <div class="field-row">
+        <label class="field"><span>Напоминание</span>
+          <select id="fRemind">
+            <option value="">Без напоминания</option>
+            <option value="0">В момент начала</option>
+            <option value="5">За 5 минут</option>
+            <option value="10">За 10 минут</option>
+            <option value="15">За 15 минут</option>
+            <option value="30">За 30 минут</option>
+            <option value="60">За 1 час</option>
+            <option value="1440">За 1 день</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="colors" id="fColors" role="radiogroup" aria-label="Цвет"></div>
+
+      <label class="field"><span>Заметки</span><textarea id="fNotes" rows="3" placeholder="Адрес, ссылка, детали…"></textarea></label>
+
+      <div class="delete-choice" id="deleteChoice" hidden>
+        <span>Удалить повторяющееся событие:</span>
+        <button type="button" class="btn" data-del="one">Только это</button>
+        <button type="button" class="btn" data-del="future">Это и следующие</button>
+        <button type="button" class="btn danger" data-del="all">Все</button>
+      </div>
+
+      <div class="dialog-foot">
+        <button type="button" class="btn danger-text" id="btnDelete">Удалить</button>
+        <button type="button" class="btn" id="btnDuplicate">Копия</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" data-close>Отмена</button>
+        <button type="submit" class="btn primary">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="dialog help" id="help">
+    <div class="dialog-head">
+      <h2>Горячие клавиши</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <dl class="keys">
+      <dt><kbd>Q</kbd></dt><dd>Быстрое добавление</dd>
+      <dt><kbd>N</kbd></dt><dd>Новое событие</dd>
+      <dt><kbd>T</kbd></dt><dd>Сегодня</dd>
+      <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Назад / вперёд</dd>
+      <dt><kbd>M</kbd> <kbd>W</kbd> <kbd>D</kbd> <kbd>A</kbd></dt><dd>Месяц, неделя, день, список</dd>
+      <dt><kbd>/</kbd></dt><dd>Поиск</dd>
+      <dt><kbd>Esc</kbd></dt><dd>Закрыть</dd>
+    </dl>
+    <h3>Быстрое добавление понимает</h3>
+    <ul class="hints">
+      <li><b>сегодня, завтра, послезавтра, через 3 дня, через неделю</b></li>
+      <li><b>в пятницу, в следующий вторник, 25 декабря, 25.12</b></li>
+      <li><b>в 15, в 9:30, в 7 вечера, с 10 до 12, 14:00–15:30</b></li>
+      <li><b>каждый день, по будням, по понедельникам, каждый месяц, каждый год</b></li>
+    </ul>
+    <p class="muted">Enter — сохранить сразу, Shift+Enter — открыть полную форму.</p>
+  </dialog>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+</body>
+</html>

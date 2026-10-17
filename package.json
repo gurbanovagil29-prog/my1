@@ -1,0 +1,10 @@
+{
+  "name": "everyday-calendar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Удобный календарь на каждый день",
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "test": "node --test test/*.test.js"
+  }
+}
