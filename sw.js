@@ -1,5 +1,5 @@
 // Офлайн-режим: отдаём файлы из кэша и обновляем кэш в фоне.
-const CACHE = 'everyday-calendar-v1';
+const CACHE = 'everyday-calendar-v2';
 const ASSETS = ['./', 'index.html', 'style.css', 'core.js', 'app.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', (e) => {

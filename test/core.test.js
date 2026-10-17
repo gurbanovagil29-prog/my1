@@ -13,7 +13,7 @@ const parse = (text) => {
 
 test('быстрое добавление: дата, время и название', () => {
   assert.deepEqual(parse('завтра в 15 встреча с Аней'), {
-    title: 'Встреча с Аней', date: '2026-10-18', start: '15:00', end: '16:00', repeat: 'none', allDay: false, matched: true,
+    title: 'Встреча с Аней', date: '2026-10-18', start: '15:00', end: '16:00', repeat: 'none', allDay: false, tag: null, matched: true,
   });
   assert.equal(parse('через 3 дня в 7 вечера кино').start, '19:00');
   assert.equal(parse('через 3 дня в 7 вечера кино').date, '2026-10-20');
@@ -56,6 +56,14 @@ test('быстрое добавление: повторы', () => {
   assert.equal(parse('оплатить интернет каждый месяц').repeat, 'monthly');
 });
 
+test('быстрое добавление: метка категории', () => {
+  const r = parse('завтра в 10 созвон #работа');
+  assert.equal(r.tag, 'работа');
+  assert.equal(r.title, 'Созвон');
+  assert.equal(r.start, '10:00');
+  assert.equal(parse('#учёба экзамен 20.12').tag, 'учёба');
+});
+
 test('обычный текст остаётся названием', () => {
   const r = parse('купить 2 яблока');
   assert.equal(r.title, 'Купить 2 яблока');
@@ -77,10 +85,12 @@ test('повторы и исключения', () => {
 test('экспорт и импорт .ics сохраняют событие', () => {
   const ev = c.normalizeEvent({
     id: 'a', title: 'Йога, утро; дома', date: '2026-10-19', start: '08:00', end: '09:15',
-    repeat: 'weekly', until: '2026-12-31', exdates: ['2026-10-26'], remind: 15, notes: 'Коврик\nвода', color: '#30a46c',
+    repeat: 'weekly', until: '2026-12-31', exdates: ['2026-10-26'], remind: 15, notes: 'Коврик\nвода', cal: 'personal',
   });
-  const [back] = c.fromICS(c.toICS([ev]), () => 'b');
-  assert.deepEqual({ ...back, id: 'a', color: ev.color }, ev);
+  const [back] = c.fromICS(c.toICS([ev], () => 'Личное, спорт'), () => 'b');
+  assert.equal(back.category, 'Личное, спорт');
+  const { category, ...rest } = back;
+  assert.deepEqual({ ...rest, id: 'a', cal: ev.cal }, ev);
 });
 
 test('нормализация отбрасывает мусор', () => {

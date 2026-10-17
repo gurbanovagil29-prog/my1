@@ -136,10 +136,11 @@ function applyPeriod(h, period) {
 
 /**
  * Разбирает фразу вида «завтра в 15 встреча с Аней» или «по пятницам с 19 до 21 спортзал».
- * Возвращает { title, date, start, end, repeat, allDay, matched } — matched показывает, что что-то распознано.
+ * Возвращает { title, date, start, end, repeat, allDay, tag, matched }: tag — метка категории из «#работа»,
+ * matched показывает, что что-то распознано.
  */
 function parseQuick(input, base = today()) {
-  const r = { title: '', date: null, start: null, end: null, repeat: 'none', allDay: false, matched: false };
+  const r = { title: '', date: null, start: null, end: null, repeat: 'none', allDay: false, tag: null, matched: false };
   let s = ` ${String(input).replace(/\s+/g, ' ').trim()} `;
   const PERIOD = '(?: (утра|дня|вечера|ночи))?';
 
@@ -156,6 +157,9 @@ function parseQuick(input, base = today()) {
   };
   const validTime = (h, m) => h >= 0 && h < 24 && m >= 0 && m < 60;
   const setDate = (d) => { if (!r.date) r.date = d; };
+
+  // Метка категории: «#работа»
+  take('#([^\\s#,.!?;]+)', (m) => { r.tag = m[1]; });
 
   // Повторы
   take('каждый день|ежедневно', () => { r.repeat = 'daily'; });
@@ -267,7 +271,8 @@ const icsEscape = (t) => String(t).replace(/\\/g, '\\\\').replace(/;/g, '\\;').r
 const icsDate = (key) => key.replace(/-/g, '');
 const icsDateTime = (key, time) => `${icsDate(key)}T${time.replace(':', '')}00`;
 
-function toICS(events) {
+/** categoryOf(ev) — необязательное имя категории для поля CATEGORIES. */
+function toICS(events, categoryOf) {
   const now = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Everyday Calendar//RU', 'CALSCALE:GREGORIAN'];
   for (const ev of events) {
@@ -278,6 +283,7 @@ function toICS(events) {
       lines.push(`DTSTART;VALUE=DATE:${icsDate(ev.date)}`, `DTEND;VALUE=DATE:${icsDate(toKey(addDays(fromKey(ev.date), 1)))}`);
     }
     lines.push(`SUMMARY:${icsEscape(ev.title)}`);
+    if (categoryOf) lines.push(`CATEGORIES:${icsEscape(categoryOf(ev))}`);
     if (ev.notes) lines.push(`DESCRIPTION:${icsEscape(ev.notes)}`);
     if (ev.repeat && ev.repeat !== 'none') {
       const until = ev.until ? `;UNTIL=${icsDate(ev.until)}${ev.start ? 'T235959' : ''}` : '';
@@ -335,6 +341,7 @@ function fromICS(text, makeId) {
     }
     if (name === 'SUMMARY') cur.title = icsUnescape(value);
     else if (name === 'DESCRIPTION') cur.notes = icsUnescape(value);
+    else if (name === 'CATEGORIES') cur.category = icsUnescape(value.split(/(?<!\\),/)[0]);
     else if (name === 'DTSTART') {
       const st = parseIcsStamp(value);
       if (st) { cur.date = st.date; cur.start = st.time; }
@@ -351,7 +358,7 @@ function fromICS(text, makeId) {
       if (rule.UNTIL) { const st = parseIcsStamp(rule.UNTIL); if (st) cur.until = st.date; }
     }
   }
-  return out.map((e) => normalizeEvent({ ...e, id: makeId() }));
+  return out.map((e) => ({ ...normalizeEvent({ ...e, id: makeId() }), category: e.category || null }));
 }
 
 /** Приводит событие к ожидаемой форме; возвращает null для мусора. */
@@ -368,7 +375,7 @@ function normalizeEvent(e) {
     repeat: REPEAT_LABELS[e.repeat] ? e.repeat : 'none',
     until: /^\d{4}-\d{2}-\d{2}$/.test(e.until || '') ? e.until : null,
     exdates: Array.isArray(e.exdates) ? e.exdates.filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x)) : [],
-    color: /^#[0-9a-f]{6}$/i.test(e.color || '') ? e.color : '#4f6bed',
+    cal: typeof e.cal === 'string' ? e.cal : '',
     remind: Number.isFinite(e.remind) && e.remind >= 0 ? e.remind : null,
     notes: String(e.notes || ''),
   };

@@ -7,9 +7,15 @@
 const STORE_KEY = 'everyday-calendar:events';
 const SETTINGS_KEY = 'everyday-calendar:settings';
 const FIRED_KEY = 'everyday-calendar:fired';
+const CALS_KEY = 'everyday-calendar:calendars';
 const HOUR_H = 48;
 const COLORS = ['#4f6bed', '#e5484d', '#f76b15', '#f5a524', '#30a46c', '#12a594', '#8e4ec6', '#e93d82', '#6b7280'];
 const VIEWS = ['month', 'week', 'day', 'agenda'];
+const DEFAULT_CALENDARS = [
+  { id: 'personal', name: 'Личное', color: '#30a46c', visible: true },
+  { id: 'work', name: 'Работа', color: '#4f6bed', visible: true },
+  { id: 'study', name: 'Учёба', color: '#8e4ec6', visible: true },
+];
 
 /* ---------- Хранилище ---------- */
 
@@ -35,8 +41,24 @@ const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString
 
 const loadEvents = () => (readJSON(STORE_KEY, []) || []).map(normalizeEvent).filter(Boolean);
 
+function normalizeCalendar(c) {
+  if (!c || typeof c !== 'object' || !c.id) return null;
+  return {
+    id: String(c.id),
+    name: String(c.name || 'Календарь').slice(0, 40),
+    color: /^#[0-9a-f]{6}$/i.test(c.color || '') ? c.color : COLORS[0],
+    visible: c.visible !== false,
+  };
+}
+
+function loadCalendars() {
+  const list = (readJSON(CALS_KEY, null) || []).map(normalizeCalendar).filter(Boolean);
+  return list.length ? list : DEFAULT_CALENDARS.map((c) => ({ ...c }));
+}
+
 const state = {
   events: loadEvents(),
+  calendars: loadCalendars(),
   settings: { theme: 'auto', view: 'month', defaultRemind: 10, ...readJSON(SETTINGS_KEY, {}) },
   cursor: today(),
   mini: today(),
@@ -50,6 +72,44 @@ function saveEvents() {
   render();
 }
 
+function saveCalendars() {
+  writeJSON(CALS_KEY, state.calendars);
+  render();
+}
+
+/* ---------- Календари (категории) ---------- */
+
+const calOf = (ev) => state.calendars.find((c) => c.id === ev.cal) || state.calendars[0];
+const colorOf = (ev) => calOf(ev).color;
+const visibleEvents = () => state.events.filter((ev) => calOf(ev).visible);
+
+/** Календарь для новых событий: первый включённый (если смотрите только «Работу», новое пойдёт туда). */
+const defaultCal = () => (state.calendars.find((c) => c.visible) || state.calendars[0]).id;
+
+const normalizeName = (t) => t.toLowerCase().replace(/ё/g, 'е');
+/** Ищет календарь по метке «#раб» — по началу названия. */
+function calByTag(tag) {
+  if (!tag) return null;
+  const t = normalizeName(tag);
+  return state.calendars.find((c) => normalizeName(c.name) === t)
+    || state.calendars.find((c) => normalizeName(c.name).startsWith(t))
+    || null;
+}
+
+function toggleCalendar(id) {
+  const cal = state.calendars.find((c) => c.id === id);
+  if (!cal) return;
+  cal.visible = !cal.visible;
+  saveCalendars();
+}
+
+/** «Только этот»: показывает один календарь; повторное нажатие снова включает все. */
+function soloCalendar(id) {
+  const alreadySolo = state.calendars.every((c) => c.visible === (c.id === id));
+  for (const c of state.calendars) c.visible = alreadySolo || c.id === id;
+  saveCalendars();
+}
+
 function saveSettings() {
   writeJSON(SETTINGS_KEY, state.settings);
 }
@@ -58,13 +118,15 @@ const findEvent = (id) => state.events.find((e) => e.id === id);
 
 /** Снимок для «Отменить». */
 function withUndo(message, change) {
-  const snapshot = JSON.stringify(state.events);
+  const snapshot = JSON.stringify({ events: state.events, calendars: state.calendars });
   change();
+  writeJSON(CALS_KEY, state.calendars);
   saveEvents();
   toast(message, {
     action: 'Отменить',
     onAction: () => {
-      state.events = JSON.parse(snapshot);
+      ({ events: state.events, calendars: state.calendars } = JSON.parse(snapshot));
+      writeJSON(CALS_KEY, state.calendars);
       saveEvents();
     },
   });
@@ -173,6 +235,7 @@ function render() {
   state.autoScroll = false;
 
   renderMini();
+  renderCalendars();
   renderSideList();
   renderFooter();
 }
@@ -229,7 +292,7 @@ function renderMonth() {
   const start = startOfWeek(first);
   const weeks = Math.ceil((wdIndex(first) + new Date(c.getFullYear(), c.getMonth() + 1, 0).getDate()) / 7);
   const end = addDays(start, weeks * 7 - 1);
-  const map = collect(state.events, start, end);
+  const map = collect(visibleEvents(), start, end);
   const t = today();
 
   const grid = h('div', { class: 'month', style: { gridTemplateRows: `auto repeat(${weeks}, minmax(0, 1fr))` } },
@@ -279,7 +342,7 @@ function renderMonth() {
 /** Список событий выбранного дня под месяцем — виден на телефоне. */
 function renderDayPanel(d) {
   const key = toKey(d);
-  const list = collect(state.events, d, d).get(key);
+  const list = collect(visibleEvents(), d, d).get(key);
   return h('div', { class: 'day-panel' },
     h('div', { class: 'day-panel-head' },
       h('strong', {}, capitalize(relativeDay(d) || WD_FULL[wdIndex(d)]), `, ${formatDate(d, { weekday: false })}`),
@@ -288,7 +351,7 @@ function renderDayPanel(d) {
       ? list.map(({ ev }) => h('button', {
         class: `side-item${isPast(ev, key) ? ' is-past' : ''}`,
         type: 'button',
-        style: { '--c': ev.color },
+        style: { '--c': colorOf(ev) },
         onclick: () => openEditor({ ev, key }),
       }, h('span', {}, ev.title, h('small', {}, formatTime(ev)))))
       : h('div', { class: 'side-empty' }, 'Свободный день'));
@@ -299,8 +362,8 @@ function chip({ ev, key }) {
     class: `chip${ev.start ? '' : ' is-allday'}${isPast(ev, key) ? ' is-past' : ''}`,
     role: 'button',
     tabindex: '0',
-    style: { '--c': ev.color },
-    title: `${ev.title}\n${formatTime(ev)}${ev.repeat !== 'none' ? ` · ${REPEAT_LABELS[ev.repeat]}` : ''}`,
+    style: { '--c': colorOf(ev) },
+    title: `${ev.title}\n${formatTime(ev)} · ${calOf(ev).name}${ev.repeat !== 'none' ? ` · ${REPEAT_LABELS[ev.repeat]}` : ''}`,
     onclick: (e) => { e.stopPropagation(); openEditor({ ev, key }); },
     onkeydown: (e) => { if (e.key === 'Enter') { e.stopPropagation(); openEditor({ ev, key }); } },
   },
@@ -313,7 +376,7 @@ function chip({ ev, key }) {
 /* ---------- Неделя / день ---------- */
 
 function renderTimeGrid(days) {
-  const map = collect(state.events, days[0], days[days.length - 1]);
+  const map = collect(visibleEvents(), days[0], days[days.length - 1]);
   const t = today();
 
   const head = h('div', { class: 'tg-row tg-head' }, h('div'),
@@ -401,13 +464,13 @@ function eventBlock(it) {
     role: 'button',
     tabindex: '0',
     style: {
-      '--c': ev.color,
+      '--c': colorOf(ev),
       top: `${(s / 60) * HOUR_H}px`,
       height: `${Math.max(((e - s) / 60) * HOUR_H - 2, 18)}px`,
       left: `calc(${(col / cols) * 100}% + 2px)`,
       width: `calc(${100 / cols}% - 4px)`,
     },
-    title: `${ev.title}\n${formatTime(ev)}`,
+    title: `${ev.title}\n${formatTime(ev)} · ${calOf(ev).name}`,
     onclick: () => { if (Date.now() > suppressClickUntil) openEditor({ ev, key }); },
     onkeydown: (k) => { if (k.key === 'Enter') openEditor({ ev, key }); },
   }, h('div', { class: 'tg-ev-title' }, ev.repeat !== 'none' ? '↻ ' : '', ev.title), time);
@@ -511,7 +574,7 @@ function dropTarget(el, key, mode) {
 function renderAgenda() {
   const from = state.cursor;
   const to = addDays(from, 59);
-  const map = collect(state.events, from, to);
+  const map = collect(visibleEvents(), from, to);
   const t = today();
   const wrap = h('div', { class: 'agenda' });
 
@@ -526,7 +589,7 @@ function renderAgenda() {
       h('div', { class: 'agenda-items' }, list.map(({ ev }) => h('button', {
         class: `agenda-item${isPast(ev, key) ? ' is-past' : ''}`,
         type: 'button',
-        style: { '--c': ev.color },
+        style: { '--c': colorOf(ev) },
         onclick: () => openEditor({ ev, key }),
       },
       h('span', { class: 'agenda-time' }, formatTime(ev)),
@@ -538,8 +601,9 @@ function renderAgenda() {
 
   if (!wrap.childElementCount) {
     wrap.append(h('div', { class: 'empty' },
-      h('strong', {}, 'Ближайшие 60 дней свободны'),
-      'Добавьте событие кнопкой «Создать» или строкой быстрого добавления сверху.'));
+      ...(state.calendars.some((c) => c.visible)
+        ? [h('strong', {}, 'Ближайшие 60 дней свободны'), 'Добавьте событие кнопкой «Создать» или строкой быстрого добавления сверху.']
+        : [h('strong', {}, 'Все календари скрыты'), 'Включите нужные календари слева.'])));
   }
   return wrap;
 }
@@ -551,7 +615,7 @@ function renderMini() {
   const first = new Date(m.getFullYear(), m.getMonth(), 1);
   const start = startOfWeek(first);
   const end = addDays(start, 41);
-  const map = collect(state.events, start, end);
+  const map = collect(visibleEvents(), start, end);
   const t = today();
 
   const grid = h('div', { class: 'mini-grid' }, WD_SHORT.map((w) => h('div', { class: 'mini-wd' }, w)));
@@ -579,9 +643,36 @@ function renderMini() {
     grid);
 }
 
+function renderCalendars() {
+  const t = today();
+  const week = collect(state.events, t, addDays(t, 6));
+  const counts = {};
+  for (const list of week.values()) for (const { ev } of list) counts[calOf(ev).id] = (counts[calOf(ev).id] || 0) + 1;
+
+  $('#calList').replaceChildren(...state.calendars.map((c, i) => h('div', {
+    class: `cal-row${c.visible ? '' : ' is-off'}`,
+    style: { '--c': c.color },
+  },
+  h('label', { class: 'switch', title: `${c.visible ? 'Скрыть' : 'Показать'} (клавиша ${i + 1})` },
+    h('input', { type: 'checkbox', role: 'switch', checked: c.visible, onchange: () => toggleCalendar(c.id) }),
+    h('span', { class: 'switch-track' }),
+    h('span', { class: 'cal-name' }, c.name),
+    h('span', { class: 'cal-count', title: 'Событий на ближайшие 7 дней' }, counts[c.id] || '')),
+  h('button', { class: 'cal-action', type: 'button', title: 'Показать только этот календарь', onclick: () => soloCalendar(c.id) }, 'только'),
+  h('button', { class: 'cal-action', type: 'button', title: 'Изменить', 'aria-label': `Изменить «${c.name}»`, onclick: () => openCalEditor(c) }, '✎'))));
+
+  $('#calBar').replaceChildren(...state.calendars.map((c) => h('button', {
+    class: `cal-chip${c.visible ? ' is-on' : ''}`,
+    type: 'button',
+    'aria-pressed': String(c.visible),
+    style: { '--c': c.color },
+    onclick: () => toggleCalendar(c.id),
+  }, c.name)));
+}
+
 function renderSideList() {
   const t = today();
-  const map = collect(state.events, t, addDays(t, 1));
+  const map = collect(visibleEvents(), t, addDays(t, 1));
   const section = (label, key) => {
     const list = map.get(key);
     return [
@@ -590,7 +681,7 @@ function renderSideList() {
         ? list.map(({ ev }) => h('button', {
           class: `side-item${isPast(ev, key) ? ' is-past' : ''}`,
           type: 'button',
-          style: { '--c': ev.color },
+          style: { '--c': colorOf(ev) },
           onclick: () => { openEditor({ ev, key }); closeNav(); },
         }, h('span', {}, ev.title, h('small', {}, formatTime(ev)))))
         : h('div', { class: 'side-empty' }, 'Ничего не запланировано'),
@@ -634,23 +725,22 @@ const f = {
   until: $('#fUntil'),
   remind: $('#fRemind'),
   notes: $('#fNotes'),
-  colors: $('#fColors'),
+  cal: $('#fCal'),
 };
 let editing = null;
-let pickedColor = COLORS[0];
+let pickedCal = null;
 
 for (const [value, label] of Object.entries(REPEAT_LABELS)) f.repeat.append(h('option', { value }, label));
 
-function renderColors() {
-  f.colors.replaceChildren(...COLORS.map((c) => h('button', {
-    class: 'color-swatch',
+function renderCalPicker() {
+  f.cal.replaceChildren(...state.calendars.map((c) => h('button', {
+    class: 'cal-chip',
     type: 'button',
     role: 'radio',
-    'aria-checked': String(c === pickedColor),
-    'aria-label': `Цвет ${c}`,
-    style: { '--c': c },
-    onclick: () => { pickedColor = c; renderColors(); },
-  })));
+    'aria-checked': String(c.id === pickedCal),
+    style: { '--c': c.color },
+    onclick: () => { pickedCal = c.id; renderCalPicker(); },
+  }, c.name)));
 }
 
 function syncEditorFields() {
@@ -680,7 +770,7 @@ function openEditor({ ev = null, key = null, preset = {} } = {}) {
       end: s ? (preset.end || fromMin(toMin(s) + 60)) : null,
       repeat: preset.repeat || 'none',
       until: null,
-      color: preset.color || COLORS[0],
+      cal: preset.cal || defaultCal(),
       remind: state.settings.defaultRemind,
       notes: '',
     };
@@ -695,8 +785,8 @@ function openEditor({ ev = null, key = null, preset = {} } = {}) {
   f.until.value = v.until || '';
   f.remind.value = v.remind == null ? '' : String(v.remind);
   f.notes.value = v.notes || '';
-  pickedColor = v.color;
-  renderColors();
+  pickedCal = calOf(v).id;
+  renderCalPicker();
   $('#btnDelete').hidden = !ev;
   $('#btnDuplicate').hidden = !ev;
   $('#deleteChoice').hidden = true;
@@ -720,7 +810,7 @@ function readEditor() {
     end,
     repeat,
     until: repeat !== 'none' && f.until.value ? f.until.value : null,
-    color: pickedColor,
+    cal: pickedCal,
     remind: f.remind.value === '' ? null : Number(f.remind.value),
     notes: f.notes.value.trim(),
   };
@@ -742,6 +832,11 @@ $('#editorForm').addEventListener('submit', (e) => {
   e.preventDefault();
   const data = readEditor();
   const target = editing.id && findEvent(editing.id);
+  const cal = state.calendars.find((c) => c.id === data.cal);
+  if (cal && !cal.visible) {
+    cal.visible = true;
+    writeJSON(CALS_KEY, state.calendars);
+  }
   if (target) {
     withUndo('Изменения сохранены', () => Object.assign(target, data));
   } else {
@@ -795,12 +890,70 @@ for (const dlg of $$('dialog')) {
   dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
 }
 
+/* ---------- Редактор календаря ---------- */
+
+const calEditor = $('#calEditor');
+let editingCal = null;
+let pickedCalColor = COLORS[0];
+
+function renderCalColors() {
+  $('#cColors').replaceChildren(...COLORS.map((c) => h('button', {
+    class: 'color-swatch',
+    type: 'button',
+    role: 'radio',
+    'aria-checked': String(c === pickedCalColor),
+    'aria-label': `Цвет ${c}`,
+    style: { '--c': c },
+    onclick: () => { pickedCalColor = c; renderCalColors(); },
+  })));
+}
+
+function openCalEditor(cal = null) {
+  closeNav();
+  editingCal = cal ? cal.id : null;
+  const used = new Set(state.calendars.map((c) => c.color));
+  pickedCalColor = cal ? cal.color : (COLORS.find((c) => !used.has(c)) || COLORS[0]);
+  $('#cName').value = cal ? cal.name : '';
+  const n = cal ? state.events.filter((ev) => calOf(ev).id === cal.id).length : 0;
+  $('#cHint').textContent = cal
+    ? `Событий в календаре: ${n}. В быстрой строке: #${normalizeName(cal.name).split(' ')[0]}`
+    : 'Например: Спорт, Семья, Здоровье, Проекты.';
+  $('#btnDeleteCal').hidden = !cal || state.calendars.length < 2;
+  renderCalColors();
+  calEditor.showModal();
+  $('#cName').focus();
+}
+
+$('#btnAddCal').addEventListener('click', () => openCalEditor());
+
+$('#calForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const name = $('#cName').value.trim() || 'Календарь';
+  const cal = state.calendars.find((c) => c.id === editingCal);
+  if (cal) Object.assign(cal, { name, color: pickedCalColor });
+  else state.calendars.push({ id: uid(), name, color: pickedCalColor, visible: true });
+  calEditor.close();
+  saveCalendars();
+});
+
+$('#btnDeleteCal').addEventListener('click', () => {
+  const cal = state.calendars.find((c) => c.id === editingCal);
+  if (!cal) return;
+  const n = state.events.filter((ev) => calOf(ev).id === cal.id).length;
+  calEditor.close();
+  withUndo(`Календарь «${cal.name}» удалён${n ? ` вместе с событиями (${n})` : ''}`, () => {
+    state.events = state.events.filter((ev) => calOf(ev).id !== cal.id);
+    state.calendars = state.calendars.filter((c) => c.id !== cal.id);
+  });
+});
+
 /* ---------- Быстрое добавление ---------- */
 
 const quickInput = $('#quickInput');
 
 function quickParse() {
   const r = parseQuick(quickInput.value, today());
+  r.cal = calByTag(r.tag);
   if (!r.date) r.date = r.repeat === 'none' || state.cursor >= today() ? state.cursor : today();
   return r;
 }
@@ -811,7 +964,11 @@ function updateQuickPreview() {
   const r = quickParse();
   const parts = [relativeDay(r.date) || formatDate(r.date), r.start ? `${r.start}–${r.end}` : 'весь день'];
   if (r.repeat !== 'none') parts.push(REPEAT_LABELS[r.repeat].toLowerCase());
-  preview.textContent = `${r.title || 'Без названия'} · ${parts.join(', ')}`;
+  const cal = r.cal || state.calendars.find((c) => c.id === defaultCal());
+  preview.replaceChildren(
+    `${r.title || 'Без названия'} · ${parts.join(', ')} · `,
+    h('span', { class: 'quick-cal', style: { '--c': cal.color } }, r.tag && !r.cal ? `#${r.tag}?` : cal.name),
+  );
 }
 
 quickInput.addEventListener('input', updateQuickPreview);
@@ -820,7 +977,7 @@ quickInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && e.shiftKey) {
     e.preventDefault();
     const r = quickParse();
-    openEditor({ preset: { title: r.title, date: toKey(r.date), start: r.start, end: r.end, repeat: r.repeat, allDay: !r.start } });
+    openEditor({ preset: { title: r.title, date: toKey(r.date), start: r.start, end: r.end, repeat: r.repeat, allDay: !r.start, cal: r.cal?.id } });
     quickInput.value = '';
     updateQuickPreview();
   }
@@ -839,12 +996,15 @@ $('#quickForm').addEventListener('submit', (e) => {
     repeat: r.repeat,
     until: null,
     exdates: [],
-    color: COLORS[0],
+    cal: r.cal ? r.cal.id : defaultCal(),
     remind: r.start ? state.settings.defaultRemind : null,
     notes: '',
   };
-  withUndo(`Добавлено: ${ev.title} · ${relativeDay(r.date) || formatDate(r.date)}${r.start ? `, ${r.start}` : ''}`, () => {
+  const cal = calOf(ev);
+  withUndo(`Добавлено в «${cal.name}»: ${ev.title} · ${relativeDay(r.date) || formatDate(r.date)}${r.start ? `, ${r.start}` : ''}`, () => {
     state.events.push(ev);
+    // Событие должно быть видно сразу, даже если его календарь был скрыт
+    cal.visible = true;
     // Переходим к дате события, только если её сейчас не видно
     const [from, to] = visibleRange();
     if (r.date < from || r.date > to) {
@@ -884,7 +1044,7 @@ function renderSearch() {
     ? found.map(({ ev, key }) => h('button', {
       class: `side-item${isPast(ev, key) ? ' is-past' : ''}`,
       type: 'button',
-      style: { '--c': ev.color },
+      style: { '--c': colorOf(ev) },
       onclick: () => {
         searchResults.hidden = true;
         searchInput.value = '';
@@ -892,7 +1052,7 @@ function renderSearch() {
         openEditor({ ev, key });
       },
     }, h('span', {}, highlight(ev.title, q),
-      h('small', {}, `${capitalize(formatDate(fromKey(key)))} · ${formatTime(ev)}${ev.repeat !== 'none' ? ` · ↻ ${REPEAT_LABELS[ev.repeat].toLowerCase()}` : ''}`))))
+      h('small', {}, `${capitalize(formatDate(fromKey(key)))} · ${formatTime(ev)} · ${calOf(ev).name}${ev.repeat !== 'none' ? ` · ↻ ${REPEAT_LABELS[ev.repeat].toLowerCase()}` : ''}`))))
     : [h('div', { class: 'side-empty' }, 'Ничего не найдено')]));
   searchResults.hidden = false;
 }
@@ -979,11 +1139,11 @@ function download(name, text, type) {
 }
 
 $('#btnExportJson').addEventListener('click', () => {
-  download(`calendar-${toKey(today())}.json`, JSON.stringify({ version: 1, events: state.events }, null, 2), 'application/json');
+  download(`calendar-${toKey(today())}.json`, JSON.stringify({ version: 2, calendars: state.calendars, events: state.events }, null, 2), 'application/json');
 });
 
 $('#btnExportIcs').addEventListener('click', () => {
-  download(`calendar-${toKey(today())}.ics`, toICS(state.events), 'text/calendar');
+  download(`calendar-${toKey(today())}.ics`, toICS(state.events, (ev) => calOf(ev).name), 'text/calendar');
 });
 
 $('#btnImport').addEventListener('click', () => $('#importFile').click());
@@ -995,15 +1155,34 @@ $('#importFile').addEventListener('change', async (e) => {
   try {
     const text = await file.text();
     let incoming;
+    let calendars = [];
     if (/^\s*BEGIN:VCALENDAR/.test(text)) {
       incoming = fromICS(text, uid);
     } else {
       const data = JSON.parse(text);
       incoming = (Array.isArray(data) ? data : data.events || []).map(normalizeEvent);
+      calendars = (data.calendars || []).map(normalizeCalendar).filter(Boolean);
     }
     incoming = incoming.filter(Boolean);
     if (!incoming.length) return toast('В файле не найдено событий');
     withUndo(`Импортировано событий: ${incoming.length}`, () => {
+      for (const c of calendars) {
+        const same = state.calendars.find((x) => x.id === c.id);
+        if (same) Object.assign(same, c);
+        else state.calendars.push(c);
+      }
+      // Категории из .ics: находим календарь по имени или создаём новый
+      for (const ev of incoming) {
+        if (ev.category) {
+          let cal = state.calendars.find((c) => normalizeName(c.name) === normalizeName(ev.category));
+          if (!cal) {
+            cal = { id: uid(), name: ev.category.slice(0, 40), color: COLORS[state.calendars.length % COLORS.length], visible: true };
+            state.calendars.push(cal);
+          }
+          ev.cal = cal.id;
+        }
+        delete ev.category;
+      }
       const byId = new Map(state.events.map((x) => [x.id, x]));
       for (const ev of incoming) byId.set(ev.id, ev);
       state.events = [...byId.values()];
@@ -1050,6 +1229,13 @@ document.addEventListener('keydown', (e) => {
     Slash: () => (e.shiftKey ? $('#help').showModal() : searchInput.focus()),
     Escape: closeNav,
   };
+  const digit = /^Digit([1-9])$/.exec(e.code);
+  if (digit && state.calendars[digit[1] - 1]) {
+    e.preventDefault();
+    if (e.shiftKey) soloCalendar(state.calendars[digit[1] - 1].id);
+    else toggleCalendar(state.calendars[digit[1] - 1].id);
+    return;
+  }
   const fn = actions[e.code];
   if (fn) {
     e.preventDefault();
@@ -1072,10 +1258,10 @@ $('#view').addEventListener('touchend', (e) => {
 
 // Изменения из другой вкладки
 window.addEventListener('storage', (e) => {
-  if (e.key === STORE_KEY) {
-    state.events = loadEvents();
-    render();
-  }
+  if (e.key === STORE_KEY) state.events = loadEvents();
+  else if (e.key === CALS_KEY) state.calendars = loadCalendars();
+  else return;
+  render();
 });
 
 // Раз в минуту: линия «сейчас», прошедшие события, смена дня, напоминания
