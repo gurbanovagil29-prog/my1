@@ -1,5 +1,5 @@
 // Офлайн-режим: отдаём файлы из кэша и обновляем кэш в фоне.
-const CACHE = 'everyday-calendar-v5';
+const CACHE = 'everyday-calendar-v6';
 const ASSETS = [
   './', 'index.html', 'style.css', 'config.js', 'core.js', 'sync.js', 'tasks.js', 'app.js',
   'vendor/supabase-2.117.2.js', 'manifest.webmanifest', 'icon.svg',

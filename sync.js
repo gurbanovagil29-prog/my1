@@ -181,7 +181,7 @@ const sync = {
   applying: false,
   timer: null,
   channel: null,
-  pendingEmail: null,
+  authMode: 'signin', // signin | signup | reset | recovery (задать новый пароль по ссылке из письма)
 };
 
 const syncConfigured = () => {
@@ -296,6 +296,11 @@ async function initSync() {
   }
 
   sync.client.auth.onAuthStateChange((event, session) => {
+    if (event === 'PASSWORD_RECOVERY') {
+      // Открыли ссылку «сбросить пароль» из письма — просим придумать новый
+      sync.authMode = 'recovery';
+      setTimeout(openSyncDialog, 0);
+    }
     const user = session?.user || null;
     if (user?.id === sync.user?.id) return;
     sync.user = user;
@@ -364,12 +369,28 @@ function renderSyncDialog() {
     return;
   }
 
+  if (sync.authMode === 'recovery') {
+    body.replaceChildren(passwordForm({
+      intro: 'Придумайте новый пароль для входа.',
+      fields: ['new-password'],
+      submit: 'Сохранить пароль',
+      action: async ({ password }) => {
+        const { error } = await sync.client.auth.updateUser({ password });
+        if (error) return authError(error);
+        sync.authMode = 'signin';
+        $('#syncDialog').close();
+        toast('Пароль изменён');
+      },
+    }));
+    return;
+  }
+
   if (sync.user) {
     body.replaceChildren(
       h('div', { class: 'sync-account' },
         h('div', { class: 'sync-avatar' }, (sync.user.email || '?')[0].toUpperCase()),
         h('div', {}, h('strong', {}, sync.user.email || 'Аккаунт'), h('small', {}, `${icon} ${text}`))),
-      h('p', { class: 'muted' }, 'Войдите под этим же email на других устройствах — события, задачи и календари будут общими. Какие календари показывать, каждое устройство решает само.'),
+      h('p', { class: 'muted' }, 'Войдите под этим же email и паролем на других устройствах — события, задачи и календари будут общими. Какие календари показывать, каждое устройство решает само.'),
       sync.status === 'error' && sync.error ? h('p', { class: 'sync-error' }, String(sync.error.message || sync.error)) : null,
       h('div', { class: 'dialog-foot' },
         h('button', { class: 'btn danger-text', type: 'button', onclick: signOut }, 'Выйти'),
@@ -378,72 +399,131 @@ function renderSyncDialog() {
     return;
   }
 
-  if (sync.pendingEmail) {
-    const code = h('input', { class: 'sync-code', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '10', placeholder: '123456', 'aria-label': 'Код из письма' });
-    const form = h('form', {
-      class: 'sync-form',
-      onsubmit: async (e) => {
-        e.preventDefault();
-        const token = code.value.replace(/\s/g, '');
-        if (!token) return;
-        const btn = $('button[type=submit]', form);
-        btn.disabled = true;
-        const { error } = await sync.client.auth.verifyOtp({ email: sync.pendingEmail, token, type: 'email' });
-        btn.disabled = false;
-        if (error) {
-          toast('Код не подошёл или устарел. Проверьте письмо или запросите новый');
-          return;
-        }
-        sync.pendingEmail = null;
-        $('#syncDialog').close();
+  const redirectTo = location.href.split('#')[0].split('?')[0];
+  const switchTo = (mode) => { sync.authMode = mode; renderSyncDialog(); };
+  const google = window.SYNC_CONFIG.google
+    ? h('button', { class: 'btn', type: 'button', onclick: () => sync.client.auth.signInWithOAuth({ provider: 'google', options: { redirectTo } }) }, 'Войти через Google')
+    : null;
+
+  if (sync.authMode === 'reset') {
+    body.replaceChildren(passwordForm({
+      intro: 'Пришлём на почту ссылку, по которой можно задать новый пароль.',
+      fields: ['email'],
+      submit: 'Отправить ссылку',
+      secondary: ['Назад', () => switchTo('signin')],
+      action: async ({ email }) => {
+        const { error } = await sync.client.auth.resetPasswordForEmail(email, { redirectTo });
+        if (error) return authError(error);
+        sync.notice = `Письмо отправлено на ${email}. Откройте ссылку из него — календарь попросит новый пароль.`;
+        switchTo('signin');
       },
-    },
-    h('p', {}, 'Мы отправили письмо на ', h('strong', {}, sync.pendingEmail), '. Введите код из письма (или просто откройте ссылку в нём на этом устройстве).'),
-    code,
-    h('div', { class: 'dialog-foot' },
-      h('button', { class: 'btn', type: 'button', onclick: () => { sync.pendingEmail = null; renderSyncDialog(); } }, 'Другой email'),
-      h('span', { class: 'spacer' }),
-      h('button', { class: 'btn primary', type: 'submit' }, 'Войти')));
-    body.replaceChildren(form);
-    setTimeout(() => code.focus(), 50);
+    }));
     return;
   }
 
-  const email = h('input', { type: 'email', class: 'sync-email', required: true, autocomplete: 'email', placeholder: 'you@example.com', 'aria-label': 'Email' });
+  if (sync.authMode === 'signup') {
+    body.replaceChildren(passwordForm({
+      intro: 'Создайте аккаунт — один на все ваши устройства.',
+      fields: ['email', 'new-password'],
+      submit: 'Создать аккаунт',
+      secondary: ['У меня есть аккаунт', () => switchTo('signin')],
+      extra: google,
+      action: async ({ email, password }) => {
+        const { data, error } = await sync.client.auth.signUp({ email, password, options: { emailRedirectTo: redirectTo } });
+        if (error) return authError(error);
+        if (data.session) {
+          $('#syncDialog').close();
+          return;
+        }
+        // Включено подтверждение email: сначала ссылка из письма, потом вход с паролем
+        sync.notice = `Аккаунт создан. Мы отправили письмо на ${email} — откройте ссылку в нём, затем войдите здесь с паролем.`;
+        switchTo('signin');
+      },
+    }));
+    return;
+  }
+
+  body.replaceChildren(passwordForm({
+    intro: 'Войдите, чтобы события и задачи были одинаковыми на телефоне и компьютере.',
+    fields: ['email', 'current-password'],
+    submit: 'Войти',
+    secondary: ['Создать аккаунт', () => switchTo('signup')],
+    extra: [google, h('button', { class: 'link-btn forgot-btn', type: 'button', onclick: () => switchTo('reset') }, 'Забыли пароль?')],
+    action: async ({ email, password }) => {
+      const { error } = await sync.client.auth.signInWithPassword({ email, password });
+      if (error) return authError(error);
+      $('#syncDialog').close();
+    },
+  }));
+}
+
+/** Форма входа: fields — какие поля показать (email, current-password, new-password). */
+function passwordForm({ intro, fields, submit, secondary, extra, action }) {
+  const inputs = {};
+  if (fields.includes('email')) {
+    inputs.email = h('input', { type: 'email', class: 'sync-email', required: true, autocomplete: 'email', placeholder: 'you@example.com', 'aria-label': 'Email' });
+  }
+  const pass = fields.find((x) => x.endsWith('password'));
+  if (pass) {
+    inputs.password = h('input', {
+      type: 'password',
+      class: 'sync-email',
+      required: true,
+      minlength: pass === 'new-password' ? '6' : null,
+      autocomplete: pass,
+      placeholder: pass === 'new-password' ? 'Пароль, не короче 6 символов' : 'Пароль',
+      'aria-label': 'Пароль',
+    });
+  }
+  // Сообщения показываем в самой форме: всплывающие уведомления прячутся под затемнением окна
+  const notice = h('p', { class: 'sync-notice', hidden: !sync.notice }, sync.notice || '');
+  sync.notice = null;
+  const errorEl = h('p', { class: 'sync-error', role: 'alert', hidden: true });
   const form = h('form', {
     class: 'sync-form',
     onsubmit: async (e) => {
       e.preventDefault();
       const btn = $('button[type=submit]', form);
       btn.disabled = true;
-      const { error } = await sync.client.auth.signInWithOtp({
-        email: email.value.trim(),
-        options: { emailRedirectTo: location.href.split('#')[0].split('?')[0] },
-      });
-      btn.disabled = false;
-      if (error) {
-        toast(/rate|limit|seconds/i.test(error.message) ? 'Слишком часто. Подождите минуту и попробуйте снова' : `Не удалось отправить письмо: ${error.message}`);
-        return;
+      errorEl.hidden = true;
+      try {
+        const message = await action({ email: inputs.email?.value.trim(), password: inputs.password?.value });
+        if (message) {
+          errorEl.textContent = message;
+          errorEl.hidden = false;
+        }
+      } finally {
+        btn.disabled = false;
       }
-      sync.pendingEmail = email.value.trim();
-      renderSyncDialog();
     },
   },
-  h('p', {}, 'Войдите, чтобы события и задачи были одинаковыми на телефоне и компьютере. Пароль не нужен — пришлём код на почту.'),
-  email,
+  notice,
+  h('p', {}, intro),
+  Object.values(inputs),
+  errorEl,
   h('div', { class: 'dialog-foot' },
-    window.SYNC_CONFIG.google
-      ? h('button', {
-        class: 'btn',
-        type: 'button',
-        onclick: () => sync.client.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.href.split('#')[0].split('?')[0] } }),
-      }, 'Войти через Google')
-      : null,
+    secondary ? h('button', { class: 'btn', type: 'button', onclick: secondary[1] }, secondary[0]) : null,
     h('span', { class: 'spacer' }),
-    h('button', { class: 'btn primary', type: 'submit' }, 'Получить код')),
-  h('p', { class: 'muted' }, 'Данные, которые уже есть на этом устройстве, объединятся с облаком — ничего не пропадёт.'));
-  body.replaceChildren(form);
-  setTimeout(() => email.focus(), 50);
+    h('button', { class: 'btn primary', type: 'submit' }, submit)),
+  extra || null,
+  fields.includes('email') ? h('p', { class: 'muted' }, 'Данные, которые уже есть на этом устройстве, объединятся с облаком — ничего не пропадёт.') : null);
+  setTimeout(() => (inputs.email || inputs.password).focus(), 50);
+  return form;
+}
+
+/** Понятный текст ошибки входа. */
+function authError(error) {
+  const msg = error.message || String(error);
+  const known = [
+    [/invalid login credentials/i, 'Неверный email или пароль'],
+    [/email not confirmed/i, 'Email ещё не подтверждён: откройте ссылку из письма, которое пришло при регистрации'],
+    [/already registered|already exists/i, 'Такой аккаунт уже есть — нажмите «У меня есть аккаунт» и войдите'],
+    [/password should be|at least 6|weak/i, 'Пароль слишком простой: нужно не меньше 6 символов'],
+    [/rate limit|too many|seconds/i, 'Слишком много попыток. Подождите немного и попробуйте снова'],
+    [/same.*password|different from the old/i, 'Новый пароль должен отличаться от старого'],
+    [/fetch|network/i, 'Нет связи с сервером. Проверьте интернет'],
+  ];
+  return (known.find(([re]) => re.test(msg)) || [null, `Не получилось: ${msg}`])[1];
 }
 
 async function signOut() {

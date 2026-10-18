@@ -1005,3 +1005,7 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: va
   .quick input { font-size: 16px; }
   .search input { font-size: 16px; }
 }
+.sync-form .sync-email + .sync-email { margin-top: 6px; }
+.forgot-btn { width: auto; margin-top: 4px; padding: 4px 0; font-size: 13px; }
+.sync-notice { padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, #30a46c 14%, transparent); }
+.sync-form .sync-error { margin: 8px 0 0; }

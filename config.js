@@ -3,7 +3,7 @@
 // Эти значения не секретные: доступ к данным защищён входом и правилами базы (supabase/schema.sql).
 // Секретный ключ (service_role / secret) сюда вписывать нельзя.
 window.SYNC_CONFIG = {
-  supabaseUrl: '',
+  supabaseUrl: 'https://dtwdhhyqseokmaliwkje.supabase.co',
   supabaseKey: '',
   // true — показать кнопку «Войти через Google» (нужно включить Google в Supabase → Authentication → Providers)
   google: false,
