@@ -333,12 +333,12 @@ function timeAgo(d) {
 
 function syncStatusText() {
   switch (sync.status) {
-    case 'off': return ['☁', 'Синхронизация не настроена'];
-    case 'signed-out': return ['☁', 'Войдите, чтобы синхронизировать устройства'];
+    case 'off': return ['☁︎', 'Синхронизация не настроена'];
+    case 'signed-out': return ['☁︎', 'Войдите, чтобы синхронизировать устройства'];
     case 'syncing': return ['↻', 'Синхронизация…'];
     case 'ok': return ['✓', `Синхронизировано ${sync.lastSync ? timeAgo(sync.lastSync) : ''}`];
-    case 'offline': return ['⚠', 'Нет сети — изменения сохранены и отправятся позже'];
-    default: return ['⚠', 'Ошибка синхронизации — повторим автоматически'];
+    case 'offline': return ['⚠︎', 'Нет сети — изменения сохранены и отправятся позже'];
+    default: return ['⚠︎', 'Ошибка синхронизации — повторим автоматически'];
   }
 }
 
