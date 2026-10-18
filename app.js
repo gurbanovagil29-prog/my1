@@ -1,8 +1,12 @@
 'use strict';
 
-/* global MONTHS, MONTHS_GEN, WD_SHORT, WD_FULL, REPEAT_LABELS, pad, toKey, fromKey, today, addDays, addMonths,
+/* global spanDays, deadlineMoment, MONTHS, MONTHS_GEN, WD_SHORT, WD_FULL, REPEAT_LABELS, pad, toKey, fromKey, today, addDays, addMonths,
    wdIndex, startOfWeek, sameDay, dayDiff, toMin, fromMin, snap, occursOn, endMinutes, collect, nextOccurrence,
-   parseQuick, toICS, fromICS, normalizeEvent */
+   parseQuick, toICS, fromICS, normalizeEvent, normalizeTask, taskDeadline,
+   TASKS_KEY, loadTasks, saveTasks, findTask, visibleTasks, deadlineOf, isOverdue, tasksByDay, linkedTasks, detachTasks,
+   deadlineLabel, overdueLabel, taskChip, taskLine, deadlineMarker, progressBadge, moveTask, renderTasksView,
+   taskBadgeCount, openTaskEditor, initTasks, renderEvTasks, commitPendingTasks, compareTasks,
+   syncSoon, initSync, openSyncDialog, renderSyncStatus */
 
 const STORE_KEY = 'everyday-calendar:events';
 const SETTINGS_KEY = 'everyday-calendar:settings';
@@ -10,7 +14,7 @@ const FIRED_KEY = 'everyday-calendar:fired';
 const CALS_KEY = 'everyday-calendar:calendars';
 const HOUR_H = 48;
 const COLORS = ['#4f6bed', '#e5484d', '#f76b15', '#f5a524', '#30a46c', '#12a594', '#8e4ec6', '#e93d82', '#6b7280'];
-const VIEWS = ['month', 'week', 'day', 'agenda'];
+const VIEWS = ['month', 'week', 'day', 'agenda', 'tasks'];
 const DEFAULT_CALENDARS = [
   { id: 'personal', name: 'Личное', color: '#30a46c', visible: true },
   { id: 'work', name: 'Работа', color: '#4f6bed', visible: true },
@@ -31,6 +35,7 @@ function readJSON(key, fallback) {
 function writeJSON(key, value) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+    if (key === STORE_KEY || key === TASKS_KEY || key === CALS_KEY) syncSoon();
     return true;
   } catch {
     return false;
@@ -59,6 +64,8 @@ function loadCalendars() {
 const state = {
   events: loadEvents(),
   calendars: loadCalendars(),
+  tasks: loadTasks(),
+  quickMode: 'event',
   settings: { theme: 'auto', view: 'month', defaultRemind: 10, ...readJSON(SETTINGS_KEY, {}) },
   cursor: today(),
   mini: today(),
@@ -66,6 +73,7 @@ const state = {
   autoScroll: true,
 };
 state.view = VIEWS.includes(state.settings.view) ? state.settings.view : 'month';
+if (state.view === 'tasks') state.quickMode = 'task';
 
 function saveEvents() {
   if (!writeJSON(STORE_KEY, state.events)) toast('Не удалось сохранить: хранилище браузера недоступно');
@@ -118,15 +126,17 @@ const findEvent = (id) => state.events.find((e) => e.id === id);
 
 /** Снимок для «Отменить». */
 function withUndo(message, change) {
-  const snapshot = JSON.stringify({ events: state.events, calendars: state.calendars });
+  const snapshot = JSON.stringify({ events: state.events, calendars: state.calendars, tasks: state.tasks });
   change();
   writeJSON(CALS_KEY, state.calendars);
+  writeJSON(TASKS_KEY, state.tasks);
   saveEvents();
   toast(message, {
     action: 'Отменить',
     onAction: () => {
-      ({ events: state.events, calendars: state.calendars } = JSON.parse(snapshot));
+      ({ events: state.events, calendars: state.calendars, tasks: state.tasks } = JSON.parse(snapshot));
       writeJSON(CALS_KEY, state.calendars);
+      writeJSON(TASKS_KEY, state.tasks);
       saveEvents();
     },
   });
@@ -176,14 +186,30 @@ function formatDate(d, { weekday = true, year = 'auto' } = {}) {
   return weekday ? `${WD_SHORT[wdIndex(d)]}, ${parts}` : parts;
 }
 
-function formatTime(ev) {
+const shortDate = (d) => `${WD_SHORT[wdIndex(d)]}, ${d.getDate()} ${MONTHS_GEN[d.getMonth()].slice(0, 3)}`;
+
+/** Время события; для многодневного (если известен день начала key) — период «пт, 23 окт – вс, 25 окт». */
+function formatTime(ev, key) {
+  const len = spanDays(ev);
+  if (len > 1) {
+    const first = fromKey(key || ev.date);
+    const span = `${shortDate(first)} – ${shortDate(addDays(first, len - 1))}`;
+    return ev.start ? `${span}, ${ev.start}–${fromMin(endMinutes(ev)).replace('23:59', '24:00')}` : span;
+  }
   if (!ev.start) return 'Весь день';
   return `${ev.start}–${fromMin(endMinutes(ev)).replace('23:59', '24:00')}`;
 }
 
+/** Подпись дня внутри многодневного события: «Начало», «День 2 из 3», «Последний день». */
+function spanDayLabel({ ev, index, len }) {
+  if (index === 0) return ev.start ? `с ${ev.start}` : 'Начало';
+  if (index === len - 1) return ev.start ? `до ${fromMin(endMinutes(ev))}` : 'Последний день';
+  return `День ${index + 1} из ${len}`;
+}
+
 function isPast(ev, key) {
   const now = new Date();
-  const d = fromKey(key);
+  const d = addDays(fromKey(key), spanDays(ev) - 1);
   const endMin = ev.start ? endMinutes(ev) : 1440;
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, endMin) < now;
 }
@@ -202,6 +228,7 @@ function viewTitle() {
       const rel = relativeDay(c);
       return `${rel ? `${rel}, ` : `${WD_FULL[wdIndex(c)]}, `}${formatDate(c, { weekday: false, year: true })}`;
     }
+    case 'tasks': return 'Задачи';
     default: return `События с ${formatDate(c, { weekday: false })}`;
   }
 }
@@ -213,6 +240,11 @@ function render() {
   $('#title').textContent = viewTitle();
   document.title = `${capitalize(viewTitle())} — Календарь`;
   for (const b of $$('#viewSwitch button')) b.classList.toggle('is-active', b.dataset.view === state.view);
+  $('#app').dataset.view = state.view;
+  const badge = taskBadgeCount();
+  $('#taskBadge').hidden = !badge;
+  $('#taskBadge').textContent = badge;
+  renderQuickMode();
 
   const view = $('#view');
   const prevScroll = $('.tg-scroll', view)?.scrollTop;
@@ -220,7 +252,8 @@ function render() {
   if (state.view === 'month') view.append(...renderMonth());
   else if (state.view === 'week') view.append(renderTimeGrid(Array.from({ length: 7 }, (_, i) => addDays(startOfWeek(state.cursor), i))));
   else if (state.view === 'day') view.append(renderTimeGrid([state.cursor]));
-  else view.append(renderAgenda());
+  else if (state.view === 'agenda') view.append(renderAgenda());
+  else view.append(renderTasksView());
 
   const scroller = $('.tg-scroll', view);
   if (scroller) {
@@ -242,6 +275,7 @@ function render() {
 
 function setView(v) {
   if (!VIEWS.includes(v)) return;
+  if ((v === 'tasks') !== (state.view === 'tasks')) state.quickMode = v === 'tasks' ? 'task' : 'event';
   state.view = v;
   state.settings.view = v;
   state.autoScroll = true;
@@ -250,6 +284,7 @@ function setView(v) {
 }
 
 function go(dir) {
+  if (state.view === 'tasks') return;
   const c = state.cursor;
   if (state.view === 'month') state.cursor = addMonths(c, dir);
   else if (state.view === 'week') state.cursor = addDays(c, 7 * dir);
@@ -293,7 +328,13 @@ function renderMonth() {
   const weeks = Math.ceil((wdIndex(first) + new Date(c.getFullYear(), c.getMonth() + 1, 0).getDate()) / 7);
   const end = addDays(start, weeks * 7 - 1);
   const map = collect(visibleEvents(), start, end);
+  const tasks = tasksByDay(start, end, { standalone: true });
   const t = today();
+  const lanesByDay = new Map();
+  for (let w = 0; w < weeks; w++) {
+    const days = Array.from({ length: 7 }, (_, i) => addDays(start, w * 7 + i));
+    spanLanes(days, map).forEach((slots, i) => lanesByDay.set(toKey(days[i]), slots));
+  }
 
   const grid = h('div', { class: 'month', style: { gridTemplateRows: `auto repeat(${weeks}, minmax(0, 1fr))` } },
     WD_SHORT.map((w) => h('div', { class: 'month-wd' }, w)));
@@ -323,15 +364,24 @@ function renderMonth() {
         onclick: (e) => { e.stopPropagation(); openEditor({ preset: { date: key } }); },
       }, '+')));
 
+    // Сначала дорожки многодневных событий (пустые — распорки, чтобы полосы шли ровно), потом остальное
+    const slots = lanesByDay.get(key);
+    const lastLane = slots.findLastIndex(Boolean);
+    const items = [
+      ...slots.slice(0, lastLane + 1).map((s) => (s ? () => spanChip(s) : () => h('div', { class: 'chip-spacer' }))),
+      ...list.filter((o) => o.len === 1).map((o) => () => chip(o)),
+      ...(tasks.get(key) || []).map((task) => () => taskChip(task)),
+    ];
     const limit = 3;
-    const shown = list.length > limit + 1 ? list.slice(0, limit) : list;
-    for (const o of shown) cell.append(chip(o));
-    if (shown.length < list.length) {
+    const shown = items.length > limit + 1 ? items.slice(0, limit) : items;
+    for (const make of shown) cell.append(make());
+    const hidden = list.length + (tasks.get(key) || []).length - cell.querySelectorAll('.chip').length;
+    if (hidden > 0) {
       cell.append(h('button', {
         class: 'more',
         type: 'button',
         onclick: (e) => { e.stopPropagation(); selectDay(day, 'day'); },
-      }, `ещё ${list.length - shown.length}`));
+      }, `ещё ${hidden}`));
     }
     dropTarget(cell, key, 'date');
     grid.append(cell);
@@ -343,18 +393,71 @@ function renderMonth() {
 function renderDayPanel(d) {
   const key = toKey(d);
   const list = collect(visibleEvents(), d, d).get(key);
+  const tasks = tasksByDay(d, d).get(key) || [];
   return h('div', { class: 'day-panel' },
     h('div', { class: 'day-panel-head' },
       h('strong', {}, capitalize(relativeDay(d) || WD_FULL[wdIndex(d)]), `, ${formatDate(d, { weekday: false })}`),
       h('button', { class: 'cell-add', type: 'button', 'aria-label': 'Добавить событие', onclick: () => openEditor({ preset: { date: key } }) }, '+')),
     list.length
-      ? list.map(({ ev }) => h('button', {
-        class: `side-item${isPast(ev, key) ? ' is-past' : ''}`,
+      ? list.map((o) => h('button', {
+        class: `side-item${isPast(o.ev, o.key) ? ' is-past' : ''}`,
         type: 'button',
-        style: { '--c': colorOf(ev) },
-        onclick: () => openEditor({ ev, key }),
-      }, h('span', {}, ev.title, h('small', {}, formatTime(ev)))))
-      : h('div', { class: 'side-empty' }, 'Свободный день'));
+        style: { '--c': colorOf(o.ev) },
+        onclick: () => openEditor({ ev: o.ev, key: o.key }),
+      }, h('span', {}, o.ev.title, progressBadge(o.ev, o.key), h('small', {}, formatTime(o.ev, o.key)))))
+      : null,
+    tasks.map((task) => taskLine(task)),
+    list.length || tasks.length ? null : h('div', { class: 'side-empty' }, 'Свободный день'));
+}
+
+/**
+ * Раскладывает многодневные события по дорожкам для ряда соседних дней (неделя месяца или строка «весь день»),
+ * чтобы одно событие занимало одну и ту же строку во всех своих днях. Возвращает для каждого дня массив дорожек:
+ * вхождение с пометками segStart/segEnd (начало и конец полосы в этом ряду) или null.
+ */
+function spanLanes(days, map) {
+  const items = new Map();
+  days.forEach((d, i) => {
+    for (const o of map.get(toKey(d))) {
+      if (o.len < 2) continue;
+      const id = `${o.ev.id}@${o.key}`;
+      if (!items.has(id)) items.set(id, { from: i, to: i, days: {} });
+      const it = items.get(id);
+      it.to = i;
+      it.days[i] = o;
+    }
+  });
+  const laneEnds = [];
+  const perDay = days.map(() => []);
+  for (const it of [...items.values()].sort((a, b) => a.from - b.from || (b.to - b.from) - (a.to - a.from))) {
+    let lane = laneEnds.findIndex((endIdx) => endIdx < it.from);
+    if (lane < 0) { lane = laneEnds.length; laneEnds.push(-1); }
+    laneEnds[lane] = it.to;
+    for (let i = it.from; i <= it.to; i++) perDay[i][lane] = { ...it.days[i], segStart: i === it.from, segEnd: i === it.to };
+  }
+  return perDay.map((slots) => Array.from({ length: laneEnds.length }, (_, i) => slots[i] || null));
+}
+
+/** Полоса многодневного события: название в начале каждого ряда, скруглены настоящие начало и конец. */
+function spanChip(o) {
+  const { ev, key, index, len, segStart } = o;
+  const cls = ['chip', 'is-span'];
+  if (index === 0) cls.push('span-head');
+  if (index === len - 1) cls.push('span-tail');
+  if (isPast(ev, key)) cls.push('is-past');
+  const el = h('div', {
+    class: cls.join(' '),
+    role: 'button',
+    tabindex: '0',
+    style: { '--c': colorOf(ev) },
+    title: `${ev.title}\n${formatTime(ev, key)} · ${calOf(ev).name}${ev.repeat !== 'none' ? ` · ${REPEAT_LABELS[ev.repeat]}` : ''}`,
+    onclick: (e) => { e.stopPropagation(); openEditor({ ev, key }); },
+    onkeydown: (e) => { if (e.key === 'Enter') { e.stopPropagation(); openEditor({ ev, key }); } },
+  }, segStart
+    ? [h('span', { class: 'chip-title' }, index > 0 ? '‹ ' : '', ev.repeat !== 'none' ? '↻ ' : '', ev.start && index === 0 ? `${ev.start} ` : '', ev.title), progressBadge(ev, key)]
+    : h('span', { class: 'chip-title' }, '\u00a0'));
+  makeDraggable(el, ev, index);
+  return el;
 }
 
 function chip({ ev, key }) {
@@ -363,12 +466,13 @@ function chip({ ev, key }) {
     role: 'button',
     tabindex: '0',
     style: { '--c': colorOf(ev) },
-    title: `${ev.title}\n${formatTime(ev)} · ${calOf(ev).name}${ev.repeat !== 'none' ? ` · ${REPEAT_LABELS[ev.repeat]}` : ''}`,
+    title: `${ev.title}\n${formatTime(ev, key)} · ${calOf(ev).name}${ev.repeat !== 'none' ? ` · ${REPEAT_LABELS[ev.repeat]}` : ''}`,
     onclick: (e) => { e.stopPropagation(); openEditor({ ev, key }); },
     onkeydown: (e) => { if (e.key === 'Enter') { e.stopPropagation(); openEditor({ ev, key }); } },
   },
   ev.start ? h('span', { class: 'chip-time' }, ev.start) : null,
-  h('span', { class: 'chip-title' }, ev.repeat !== 'none' ? '↻ ' : '', ev.title));
+  h('span', { class: 'chip-title' }, ev.repeat !== 'none' ? '↻ ' : '', ev.title),
+  progressBadge(ev, key));
   makeDraggable(el, ev);
   return el;
 }
@@ -377,6 +481,7 @@ function chip({ ev, key }) {
 
 function renderTimeGrid(days) {
   const map = collect(visibleEvents(), days[0], days[days.length - 1]);
+  const tasks = tasksByDay(days[0], days[days.length - 1], { standalone: true });
   const t = today();
 
   const head = h('div', { class: 'tg-row tg-head' }, h('div'),
@@ -386,14 +491,17 @@ function renderTimeGrid(days) {
       onclick: () => selectDay(d, 'day'),
     }, h('span', { class: 'tg-wd' }, WD_SHORT[wdIndex(d)]), h('span', { class: 'tg-num' }, d.getDate()))));
 
+  const lanes = spanLanes(days, map);
   const allDay = h('div', { class: 'tg-row tg-allday' }, h('div', { class: 'tg-allday-label' }, 'весь день'),
-    days.map((d) => {
+    days.map((d, i) => {
       const key = toKey(d);
       const cell = h('div', { class: 'tg-allday-cell' });
       cell.addEventListener('click', (e) => {
         if (e.target === cell) openEditor({ preset: { date: key, allDay: true } });
       });
-      for (const o of map.get(key)) if (!o.ev.start) cell.append(chip(o));
+      for (const s of lanes[i]) cell.append(s ? spanChip(s) : h('div', { class: 'chip-spacer' }));
+      for (const o of map.get(key)) if (!o.ev.start && o.len === 1) cell.append(chip(o));
+      for (const task of tasks.get(key) || []) if (!deadlineOf(task).time) cell.append(taskChip(task));
       dropTarget(cell, key, 'allday');
       return cell;
     }));
@@ -401,13 +509,14 @@ function renderTimeGrid(days) {
   const hours = h('div', { class: 'tg-hours' });
   for (let i = 1; i < 24; i++) hours.append(h('span', { style: { top: `${i * HOUR_H}px` } }, `${pad(i)}:00`));
   const body = h('div', { class: 'tg-body', style: { height: `${24 * HOUR_H}px` } }, hours,
-    days.map((d) => dayColumn(d, map.get(toKey(d)).filter((o) => o.ev.start), sameDay(d, t))));
+    days.map((d) => dayColumn(d, map.get(toKey(d)).filter((o) => o.ev.start && o.len === 1), sameDay(d, t),
+      (tasks.get(toKey(d)) || []).filter((task) => deadlineOf(task).time))));
 
   return h('div', { class: 'tg', style: { '--cols': days.length, '--hour': `${HOUR_H}px` } },
     head, allDay, h('div', { class: 'tg-scroll' }, body));
 }
 
-function dayColumn(d, items, isToday) {
+function dayColumn(d, items, isToday, timedTasks) {
   const key = toKey(d);
   const col = h('div', { class: `tg-col${isToday ? ' is-today' : ''}${wdIndex(d) >= 5 ? ' is-weekend' : ''}`, dataset: { date: key } });
   col.addEventListener('click', (e) => {
@@ -419,6 +528,7 @@ function dayColumn(d, items, isToday) {
 
   const laid = layoutDay(items.map((o) => ({ ...o, s: toMin(o.ev.start), e: endMinutes(o.ev) })));
   for (const it of laid) col.append(eventBlock(it));
+  for (const task of timedTasks) col.append(deadlineMarker(task));
   if (isToday) col.append(h('div', { class: 'now-line', style: { top: `${nowTop()}px` } }));
   return col;
 }
@@ -473,7 +583,7 @@ function eventBlock(it) {
     title: `${ev.title}\n${formatTime(ev)} · ${calOf(ev).name}`,
     onclick: () => { if (Date.now() > suppressClickUntil) openEditor({ ev, key }); },
     onkeydown: (k) => { if (k.key === 'Enter') openEditor({ ev, key }); },
-  }, h('div', { class: 'tg-ev-title' }, ev.repeat !== 'none' ? '↻ ' : '', ev.title), time);
+  }, h('div', { class: 'tg-ev-title' }, ev.repeat !== 'none' ? '↻ ' : '', ev.title, ' ', progressBadge(ev, key)), time);
   makeDraggable(el, ev);
 
   // Потянуть за нижний край — изменить длительность (для повторов меняется вся серия)
@@ -517,13 +627,14 @@ function eventBlock(it) {
 
 let drag = null;
 
-function makeDraggable(el, ev) {
+/** dayIndex — какой по счёту день многодневного события тянут: событие сдвигается целиком. */
+function makeDraggable(el, ev, dayIndex = 0) {
   if (ev.repeat !== 'none') return; // повторяющиеся меняются через форму
   el.draggable = true;
   el.addEventListener('dragstart', (e) => {
     if (resizing) { e.preventDefault(); return; }
     const r = el.getBoundingClientRect();
-    drag = { id: ev.id, grabMin: ev.start ? ((e.clientY - r.top) / HOUR_H) * 60 : 0 };
+    drag = { id: ev.id, kind: ev.kind || 'event', dayIndex, grabMin: ev.start ? ((e.clientY - r.top) / HOUR_H) * 60 : 0 };
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', ev.title);
     requestAnimationFrame(() => el.classList.add('is-dragging'));
@@ -550,10 +661,21 @@ function dropTarget(el, key, mode) {
     if (!drag) return;
     e.preventDefault();
     e.stopPropagation();
+    if (drag.kind === 'task') {
+      moveTask(drag.id, key);
+      return;
+    }
     const ev = findEvent(drag.id);
     if (!ev) return;
-    const { grabMin } = drag;
+    const { grabMin, dayIndex } = drag;
     withUndo('Событие перенесено', () => {
+      const len = spanDays(ev);
+      if (len > 1) {
+        // Многодневное событие сдвигается целиком, время не меняется
+        ev.date = toKey(addDays(fromKey(key), -dayIndex));
+        ev.endDate = toKey(addDays(fromKey(ev.date), len - 1));
+        return;
+      }
       ev.date = key;
       if (mode === 'allday') {
         ev.start = null;
@@ -575,28 +697,33 @@ function renderAgenda() {
   const from = state.cursor;
   const to = addDays(from, 59);
   const map = collect(visibleEvents(), from, to);
+  const tasks = tasksByDay(from, to, { standalone: true });
   const t = today();
   const wrap = h('div', { class: 'agenda' });
 
   for (const [key, list] of map) {
-    if (!list.length) continue;
+    const dayTasks = tasks.get(key) || [];
+    if (!list.length && !dayTasks.length) continue;
     const d = fromKey(key);
     const rel = relativeDay(d);
     wrap.append(h('div', { class: `agenda-day${sameDay(d, t) ? ' is-today' : ''}` },
       h('div', { class: 'agenda-date' },
         h('b', {}, d.getDate()),
         h('span', {}, `${WD_SHORT[wdIndex(d)]}, ${MONTHS_GEN[d.getMonth()]}`, rel ? h('br') : null, rel)),
-      h('div', { class: 'agenda-items' }, list.map(({ ev }) => h('button', {
-        class: `agenda-item${isPast(ev, key) ? ' is-past' : ''}`,
-        type: 'button',
-        style: { '--c': colorOf(ev) },
-        onclick: () => openEditor({ ev, key }),
-      },
-      h('span', { class: 'agenda-time' }, formatTime(ev)),
-      h('span', { class: 'agenda-title' }, ev.title,
-        ev.repeat !== 'none' || ev.notes
-          ? h('small', {}, [ev.repeat !== 'none' ? `↻ ${REPEAT_LABELS[ev.repeat]}` : '', ev.notes].filter(Boolean).join(' · '))
-          : null))))));
+      h('div', { class: 'agenda-items' }, list.map((o) => {
+        const { ev } = o;
+        const extra = [o.len > 1 ? formatTime(ev, o.key) : '', ev.repeat !== 'none' ? `↻ ${REPEAT_LABELS[ev.repeat]}` : '', ev.notes];
+        return h('button', {
+          class: `agenda-item${isPast(ev, o.key) ? ' is-past' : ''}`,
+          type: 'button',
+          style: { '--c': colorOf(ev) },
+          onclick: () => openEditor({ ev, key: o.key }),
+        },
+        h('span', { class: 'agenda-time' }, o.len > 1 ? spanDayLabel(o) : formatTime(ev)),
+        h('span', { class: 'agenda-title' }, ev.title, ' ', progressBadge(ev, o.key),
+          extra.some(Boolean) ? h('small', {}, extra.filter(Boolean).join(' · ')) : null));
+      }),
+      dayTasks.map((task) => taskLine(task)))));
   }
 
   if (!wrap.childElementCount) {
@@ -616,6 +743,7 @@ function renderMini() {
   const start = startOfWeek(first);
   const end = addDays(start, 41);
   const map = collect(visibleEvents(), start, end);
+  const tasks = tasksByDay(start, end);
   const t = today();
 
   const grid = h('div', { class: 'mini-grid' }, WD_SHORT.map((w) => h('div', { class: 'mini-wd' }, w)));
@@ -625,7 +753,7 @@ function renderMini() {
     if (day.getMonth() !== m.getMonth()) cls.push('is-other');
     if (sameDay(day, t)) cls.push('is-today');
     if (sameDay(day, state.cursor)) cls.push('is-selected');
-    if (map.get(toKey(day)).length) cls.push('has-events');
+    if (map.get(toKey(day)).length || tasks.has(toKey(day))) cls.push('has-events');
     grid.append(h('button', {
       class: cls.join(' '),
       type: 'button',
@@ -647,7 +775,14 @@ function renderCalendars() {
   const t = today();
   const week = collect(state.events, t, addDays(t, 6));
   const counts = {};
-  for (const list of week.values()) for (const { ev } of list) counts[calOf(ev).id] = (counts[calOf(ev).id] || 0) + 1;
+  for (const list of week.values()) {
+    for (const { ev, index, day } of list) if (index === 0 || day === toKey(t)) counts[calOf(ev).id] = (counts[calOf(ev).id] || 0) + 1;
+  }
+  const weekEnd = toKey(addDays(t, 6));
+  for (const task of state.tasks) {
+    const dl = deadlineOf(task);
+    if (!task.done && dl && dl.date <= weekEnd) counts[calOf(task).id] = (counts[calOf(task).id] || 0) + 1;
+  }
 
   $('#calList').replaceChildren(...state.calendars.map((c, i) => h('div', {
     class: `cal-row${c.visible ? '' : ' is-off'}`,
@@ -657,7 +792,7 @@ function renderCalendars() {
     h('input', { type: 'checkbox', role: 'switch', checked: c.visible, onchange: () => toggleCalendar(c.id) }),
     h('span', { class: 'switch-track' }),
     h('span', { class: 'cal-name' }, c.name),
-    h('span', { class: 'cal-count', title: 'Событий на ближайшие 7 дней' }, counts[c.id] || '')),
+    h('span', { class: 'cal-count', title: 'Событий и открытых задач на ближайшие 7 дней' }, counts[c.id] || '')),
   h('button', { class: 'cal-action', type: 'button', title: 'Показать только этот календарь', onclick: () => soloCalendar(c.id) }, 'только'),
   h('button', { class: 'cal-action', type: 'button', title: 'Изменить', 'aria-label': `Изменить «${c.name}»`, onclick: () => openCalEditor(c) }, '✎'))));
 
@@ -673,21 +808,29 @@ function renderCalendars() {
 function renderSideList() {
   const t = today();
   const map = collect(visibleEvents(), t, addDays(t, 1));
+  const tasks = tasksByDay(t, addDays(t, 1));
   const section = (label, key) => {
     const list = map.get(key);
+    const dayTasks = (tasks.get(key) || []).filter((task) => !isOverdue(task));
     return [
       h('h3', {}, label),
-      list.length
-        ? list.map(({ ev }) => h('button', {
-          class: `side-item${isPast(ev, key) ? ' is-past' : ''}`,
-          type: 'button',
-          style: { '--c': colorOf(ev) },
-          onclick: () => { openEditor({ ev, key }); closeNav(); },
-        }, h('span', {}, ev.title, h('small', {}, formatTime(ev)))))
-        : h('div', { class: 'side-empty' }, 'Ничего не запланировано'),
+      list.map((o) => h('button', {
+        class: `side-item${isPast(o.ev, o.key) ? ' is-past' : ''}`,
+        type: 'button',
+        style: { '--c': colorOf(o.ev) },
+        onclick: () => { openEditor({ ev: o.ev, key: o.key }); closeNav(); },
+      }, h('span', {}, o.ev.title, progressBadge(o.ev, o.key),
+        h('small', {}, o.len > 1 ? `${spanDayLabel(o)} · ${formatTime(o.ev, o.key)}` : formatTime(o.ev))))),
+      dayTasks.map((task) => taskLine(task)),
+      list.length || dayTasks.length ? null : h('div', { class: 'side-empty' }, 'Ничего не запланировано'),
     ];
   };
-  $('#sideList').replaceChildren(...section('Сегодня', toKey(t)).flat(), ...section('Завтра', toKey(addDays(t, 1))).flat());
+  const overdue = visibleTasks().filter(isOverdue).sort(compareTasks);
+  $('#sideList').replaceChildren(
+    ...(overdue.length ? [h('h3', { class: 'is-overdue' }, `Просрочено · ${overdue.length}`), ...overdue.slice(0, 5).map((task) => taskLine(task, { showDate: true }))] : []),
+    ...section('Сегодня', toKey(t)).flat().filter(Boolean),
+    ...section('Завтра', toKey(addDays(t, 1))).flat().filter(Boolean),
+  );
 }
 
 function renderFooter() {
@@ -717,6 +860,7 @@ const editor = $('#editor');
 const f = {
   title: $('#fTitle'),
   date: $('#fDate'),
+  endDate: $('#fEndDate'),
   dateLabel: $('#fDateLabel'),
   allDay: $('#fAllDay'),
   start: $('#fStart'),
@@ -756,7 +900,7 @@ function defaultStart(dateKey) {
 }
 
 function openEditor({ ev = null, key = null, preset = {} } = {}) {
-  editing = { id: ev ? ev.id : null, key };
+  editing = { id: ev ? ev.id : null, key, pendingTasks: [] };
   let v;
   if (ev) {
     v = ev;
@@ -766,6 +910,7 @@ function openEditor({ ev = null, key = null, preset = {} } = {}) {
     v = {
       title: preset.title || '',
       date,
+      endDate: preset.endDate || null,
       start: s,
       end: s ? (preset.end || fromMin(toMin(s) + 60)) : null,
       repeat: preset.repeat || 'none',
@@ -778,6 +923,9 @@ function openEditor({ ev = null, key = null, preset = {} } = {}) {
 
   f.title.value = v.title;
   f.date.value = v.date;
+  f.endDate.value = v.endDate || '';
+  f.endDate.min = v.date;
+  prevDate = v.date;
   f.allDay.checked = !v.start;
   f.start.value = v.start || '09:00';
   f.end.value = v.start ? fromMin(endMinutes(v)) : '10:00';
@@ -791,6 +939,8 @@ function openEditor({ ev = null, key = null, preset = {} } = {}) {
   $('#btnDuplicate').hidden = !ev;
   $('#deleteChoice').hidden = true;
   syncEditorFields();
+  renderEvTasks();
+  $('#evTaskInput').value = '';
 
   editor.showModal();
   f.title.focus();
@@ -803,9 +953,11 @@ function readEditor() {
   let end = allDay ? null : (f.end.value || null);
   if (start && end && toMin(end) <= toMin(start)) end = fromMin(toMin(start) + 60);
   const repeat = f.repeat.value;
+  const date = f.date.value || toKey(today());
   return {
     title: f.title.value.trim() || 'Без названия',
-    date: f.date.value || toKey(today()),
+    date,
+    endDate: f.endDate.value && f.endDate.value > date ? f.endDate.value : null,
     start,
     end,
     repeat,
@@ -815,6 +967,19 @@ function readEditor() {
     notes: f.notes.value.trim(),
   };
 }
+
+// Меняете дату начала — дата окончания сдвигается вместе с ней, длительность сохраняется
+let prevDate = null;
+f.date.addEventListener('change', () => {
+  if (f.date.value && prevDate && f.endDate.value) {
+    const shift = Math.round((fromKey(f.date.value) - fromKey(prevDate)) / 86400000);
+    f.endDate.value = toKey(addDays(fromKey(f.endDate.value), shift));
+  }
+  if (f.date.value) {
+    prevDate = f.date.value;
+    f.endDate.min = f.date.value;
+  }
+});
 
 let prevStart = null;
 f.start.addEventListener('focus', () => { prevStart = f.start.value; });
@@ -840,7 +1005,9 @@ $('#editorForm').addEventListener('submit', (e) => {
   if (target) {
     withUndo('Изменения сохранены', () => Object.assign(target, data));
   } else {
-    state.events.push({ id: uid(), exdates: [], ...data });
+    const ev = { id: uid(), exdates: [], ...data };
+    state.events.push(ev);
+    commitPendingTasks(ev);
     saveEvents();
     toast(`Добавлено: ${data.title}`);
   }
@@ -862,7 +1029,10 @@ $('#btnDelete').addEventListener('click', () => {
     $('#deleteChoice button').focus();
     return;
   }
-  withUndo('Событие удалено', () => { state.events = state.events.filter((x) => x.id !== ev.id); });
+  withUndo('Событие удалено', () => {
+    detachTasks(ev.id);
+    state.events = state.events.filter((x) => x.id !== ev.id);
+  });
   editor.close();
 });
 
@@ -874,10 +1044,13 @@ $('#deleteChoice').addEventListener('click', (e) => {
   if (!ev) return editor.close();
   withUndo('Событие удалено', () => {
     if (mode === 'one') {
+      detachTasks(ev.id, (t) => t.eventKey === key);
       ev.exdates = [...(ev.exdates || []), key];
     } else if (mode === 'future' && key > ev.date) {
+      detachTasks(ev.id, (t) => (t.eventKey || ev.date) >= key);
       ev.until = toKey(addDays(fromKey(key), -1));
     } else {
+      detachTasks(ev.id);
       state.events = state.events.filter((x) => x.id !== ev.id);
     }
   });
@@ -915,8 +1088,9 @@ function openCalEditor(cal = null) {
   pickedCalColor = cal ? cal.color : (COLORS.find((c) => !used.has(c)) || COLORS[0]);
   $('#cName').value = cal ? cal.name : '';
   const n = cal ? state.events.filter((ev) => calOf(ev).id === cal.id).length : 0;
+  const nt = cal ? state.tasks.filter((task) => calOf(task).id === cal.id).length : 0;
   $('#cHint').textContent = cal
-    ? `Событий в календаре: ${n}. В быстрой строке: #${normalizeName(cal.name).split(' ')[0]}`
+    ? `Событий: ${n}, задач: ${nt}. В быстрой строке: #${normalizeName(cal.name).split(' ')[0]}`
     : 'Например: Спорт, Семья, Здоровье, Проекты.';
   $('#btnDeleteCal').hidden = !cal || state.calendars.length < 2;
   renderCalColors();
@@ -939,10 +1113,12 @@ $('#calForm').addEventListener('submit', (e) => {
 $('#btnDeleteCal').addEventListener('click', () => {
   const cal = state.calendars.find((c) => c.id === editingCal);
   if (!cal) return;
-  const n = state.events.filter((ev) => calOf(ev).id === cal.id).length;
+  const n = state.events.filter((ev) => calOf(ev).id === cal.id).length
+    + state.tasks.filter((task) => calOf(task).id === cal.id).length;
   calEditor.close();
-  withUndo(`Календарь «${cal.name}» удалён${n ? ` вместе с событиями (${n})` : ''}`, () => {
+  withUndo(`Календарь «${cal.name}» удалён${n ? ` вместе с событиями и задачами (${n})` : ''}`, () => {
     state.events = state.events.filter((ev) => calOf(ev).id !== cal.id);
+    state.tasks = state.tasks.filter((task) => calOf(task).id !== cal.id);
     state.calendars = state.calendars.filter((c) => c.id !== cal.id);
   });
 });
@@ -951,33 +1127,80 @@ $('#btnDeleteCal').addEventListener('click', () => {
 
 const quickInput = $('#quickInput');
 
+const TASK_PREFIX = /^\s*(?:задача|todo|\[\s?\])\s*[:\-–]?\s*/i;
+const quickIsTask = () => state.quickMode === 'task' || TASK_PREFIX.test(quickInput.value);
+
+function renderQuickMode() {
+  const task = quickIsTask();
+  $('#quickMode').textContent = task ? '☑ Задача' : '⚡ Событие';
+  $('#quickMode').classList.toggle('is-task', task);
+  quickInput.placeholder = task
+    ? 'Задача: «сдать отчёт до пятницы 18:00 #работа !», «купить подарок к субботе»'
+    : 'Событие: «завтра в 15 встреча с Аней», «по пятницам в 19 спортзал #личное»';
+}
+
 function quickParse() {
-  const r = parseQuick(quickInput.value, today());
+  const r = parseQuick(quickInput.value.replace(TASK_PREFIX, ''), today());
   r.cal = calByTag(r.tag);
+  r.hasDate = Boolean(r.date || r.endDate);
   if (!r.date) r.date = r.repeat === 'none' || state.cursor >= today() ? state.cursor : today();
+  if (r.spanDays) r.endDate = addDays(r.date, r.spanDays - 1);
+  if (r.endDate && r.endDate <= r.date) r.endDate = null;
   return r;
+}
+
+/** «сб, 24 окт – вс, 25 окт» для многодневного, иначе «Завтра» / «пт, 23 октября». */
+function quickDateLabel(r) {
+  if (r.endDate) return `${shortDate(r.date)} – ${shortDate(r.endDate)}`;
+  return relativeDay(r.date) || formatDate(r.date);
 }
 
 function updateQuickPreview() {
   const preview = $('#quickPreview');
   if (!quickInput.value.trim()) { preview.textContent = ''; return; }
   const r = quickParse();
-  const parts = [relativeDay(r.date) || formatDate(r.date), r.start ? `${r.start}–${r.end}` : 'весь день'];
-  if (r.repeat !== 'none') parts.push(REPEAT_LABELS[r.repeat].toLowerCase());
   const cal = r.cal || state.calendars.find((c) => c.id === defaultCal());
+  let parts;
+  if (quickIsTask()) {
+    const dl = quickTaskDeadline(r);
+    parts = [dl ? `срок ${deadlineLabel(dl)}` : 'без срока'];
+    if (r.priority) parts.push('важная');
+  } else {
+    parts = [quickDateLabel(r), r.start ? `${r.start}–${r.end}` : (r.endDate ? `${spanDays({ date: toKey(r.date), endDate: toKey(r.endDate) })} дн.` : 'весь день')];
+    if (r.repeat !== 'none') parts.push(REPEAT_LABELS[r.repeat].toLowerCase());
+  }
   preview.replaceChildren(
-    `${r.title || 'Без названия'} · ${parts.join(', ')} · `,
+    `${quickIsTask() ? '☑ ' : ''}${r.title || 'Без названия'} · ${parts.join(', ')} · `,
     h('span', { class: 'quick-cal', style: { '--c': cal.color } }, r.tag && !r.cal ? `#${r.tag}?` : cal.name),
   );
 }
 
-quickInput.addEventListener('input', updateQuickPreview);
+/** Срок задачи из фразы: дата, если названа; время без даты — сегодня; иначе без срока. */
+function quickTaskDeadline(r) {
+  if (!r.hasDate && !r.start) return null;
+  // «до конца недели», «с пятницы по воскресенье» — срок задачи последний день периода
+  return { date: toKey(r.endDate || (r.hasDate ? r.date : today())), time: r.start };
+}
+
+function toggleQuickMode() {
+  state.quickMode = state.quickMode === 'task' ? 'event' : 'task';
+  renderQuickMode();
+  updateQuickPreview();
+}
+
+$('#quickMode').addEventListener('click', () => { toggleQuickMode(); quickInput.focus(); });
+
+quickInput.addEventListener('input', () => { renderQuickMode(); updateQuickPreview(); });
 quickInput.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { quickInput.value = ''; updateQuickPreview(); quickInput.blur(); }
+  if (e.key === 'Tab' && !quickInput.value) { e.preventDefault(); toggleQuickMode(); }
   if (e.key === 'Enter' && e.shiftKey) {
     e.preventDefault();
     const r = quickParse();
-    openEditor({ preset: { title: r.title, date: toKey(r.date), start: r.start, end: r.end, repeat: r.repeat, allDay: !r.start, cal: r.cal?.id } });
+    if (quickIsTask()) {
+      const dl = quickTaskDeadline(r);
+      openTaskEditor(null, { title: r.title, due: dl?.date, time: dl?.time, priority: r.priority, cal: r.cal?.id });
+    } else openEditor({ preset: { title: r.title, date: toKey(r.date), start: r.start, end: r.end, repeat: r.repeat, allDay: !r.start, cal: r.cal?.id, endDate: r.endDate ? toKey(r.endDate) : null } });
     quickInput.value = '';
     updateQuickPreview();
   }
@@ -987,10 +1210,15 @@ $('#quickForm').addEventListener('submit', (e) => {
   e.preventDefault();
   if (!quickInput.value.trim()) return;
   const r = quickParse();
+  if (quickIsTask()) {
+    addQuickTask(r);
+    return;
+  }
   const ev = {
     id: uid(),
     title: r.title || 'Без названия',
     date: toKey(r.date),
+    endDate: r.endDate ? toKey(r.endDate) : null,
     start: r.start,
     end: r.end,
     repeat: r.repeat,
@@ -1001,7 +1229,7 @@ $('#quickForm').addEventListener('submit', (e) => {
     notes: '',
   };
   const cal = calOf(ev);
-  withUndo(`Добавлено в «${cal.name}»: ${ev.title} · ${relativeDay(r.date) || formatDate(r.date)}${r.start ? `, ${r.start}` : ''}`, () => {
+  withUndo(`Добавлено в «${cal.name}»: ${ev.title} · ${quickDateLabel(r)}${r.start ? `, ${r.start}` : ''}`, () => {
     state.events.push(ev);
     // Событие должно быть видно сразу, даже если его календарь был скрыт
     cal.visible = true;
@@ -1015,6 +1243,31 @@ $('#quickForm').addEventListener('submit', (e) => {
   quickInput.value = '';
   updateQuickPreview();
 });
+
+function addQuickTask(r) {
+  const dl = quickTaskDeadline(r);
+  const task = {
+    id: uid(),
+    title: r.title || 'Без названия',
+    due: dl?.date || null,
+    time: dl?.time || null,
+    cal: r.cal ? r.cal.id : defaultCal(),
+    priority: r.priority,
+    done: false,
+    doneAt: null,
+    eventId: null,
+    eventKey: null,
+    notes: '',
+  };
+  const cal = calOf(task);
+  withUndo(`Задача в «${cal.name}»: ${task.title}${dl ? ` · срок ${deadlineLabel(dl)}` : ''}`, () => {
+    state.tasks.push(task);
+    cal.visible = true;
+  });
+  quickInput.value = '';
+  renderQuickMode();
+  updateQuickPreview();
+}
 
 /* ---------- Поиск ---------- */
 
@@ -1040,8 +1293,27 @@ function renderSearch() {
     .sort((a, b) => (b.upcoming - a.upcoming) || (a.upcoming ? a.key.localeCompare(b.key) : b.key.localeCompare(a.key)))
     .slice(0, 30);
 
-  searchResults.replaceChildren(...(found.length
-    ? found.map(({ ev, key }) => h('button', {
+  const foundTasks = state.tasks
+    .filter((task) => task.title.toLowerCase().includes(q) || task.notes.toLowerCase().includes(q))
+    .sort(compareTasks)
+    .slice(0, 20)
+    .map((task) => {
+      const dl = deadlineOf(task);
+      return h('button', {
+        class: `side-item${task.done ? ' is-past' : ''}`,
+        type: 'button',
+        style: { '--c': colorOf(task) },
+        onclick: () => {
+          searchResults.hidden = true;
+          searchInput.value = '';
+          openTaskEditor(task);
+        },
+      }, h('span', {}, '☑ ', highlight(task.title, q),
+        h('small', {}, `${task.done ? 'Выполнено' : (dl ? `Срок: ${deadlineLabel(dl)}` : 'Без срока')} · ${calOf(task).name}`)));
+    });
+
+  searchResults.replaceChildren(...(found.length || foundTasks.length
+    ? [...foundTasks, ...found.map(({ ev, key }) => h('button', {
       class: `side-item${isPast(ev, key) ? ' is-past' : ''}`,
       type: 'button',
       style: { '--c': colorOf(ev) },
@@ -1052,7 +1324,7 @@ function renderSearch() {
         openEditor({ ev, key });
       },
     }, h('span', {}, highlight(ev.title, q),
-      h('small', {}, `${capitalize(formatDate(fromKey(key)))} · ${formatTime(ev)} · ${calOf(ev).name}${ev.repeat !== 'none' ? ` · ↻ ${REPEAT_LABELS[ev.repeat].toLowerCase()}` : ''}`))))
+      h('small', {}, `${capitalize(formatDate(fromKey(key)))} · ${formatTime(ev, key)} · ${calOf(ev).name}${ev.repeat !== 'none' ? ` · ↻ ${REPEAT_LABELS[ev.repeat].toLowerCase()}` : ''}`))))]
     : [h('div', { class: 'side-empty' }, 'Ничего не найдено')]));
   searchResults.hidden = false;
 }
@@ -1085,8 +1357,8 @@ function checkReminders() {
   const fired = readJSON(FIRED_KEY, {}) || {};
   const t = today();
   for (const [key, list] of collect(state.events, t, addDays(t, 1))) {
-    for (const { ev } of list) {
-      if (ev.remind == null) continue;
+    for (const { ev, index } of list) {
+      if (ev.remind == null || index > 0) continue;
       const d = fromKey(key);
       const startMin = ev.start ? toMin(ev.start) : 9 * 60;
       const at = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, startMin - ev.remind).getTime();
@@ -1100,6 +1372,17 @@ function checkReminders() {
       toast(`🔔 ${ev.title} — ${when}`, { reminder: true, duration: 15000 });
       showNotification(ev.title, when);
     }
+  }
+  // Задачи со временем: напоминаем за час до срока
+  for (const task of state.tasks) {
+    const dl = !task.done && deadlineOf(task);
+    if (!dl || !dl.time) continue;
+    const at = deadlineMoment(dl).getTime() - 60 * 60 * 1000;
+    const id = `task:${task.id}@${dl.date}@${dl.time}`;
+    if (fired[id] || now < at || now - at > 15 * 60 * 1000) continue;
+    fired[id] = now;
+    toast(`⚑ Через час срок: ${task.title}`, { reminder: true, duration: 15000 });
+    showNotification(`Срок через час: ${task.title}`, deadlineLabel(dl));
   }
   for (const [k, ts] of Object.entries(fired)) if (now - ts > 3 * 86400000) delete fired[k];
   writeJSON(FIRED_KEY, fired);
@@ -1139,7 +1422,7 @@ function download(name, text, type) {
 }
 
 $('#btnExportJson').addEventListener('click', () => {
-  download(`calendar-${toKey(today())}.json`, JSON.stringify({ version: 2, calendars: state.calendars, events: state.events }, null, 2), 'application/json');
+  download(`calendar-${toKey(today())}.json`, JSON.stringify({ version: 3, calendars: state.calendars, events: state.events, tasks: state.tasks }, null, 2), 'application/json');
 });
 
 $('#btnExportIcs').addEventListener('click', () => {
@@ -1156,16 +1439,21 @@ $('#importFile').addEventListener('change', async (e) => {
     const text = await file.text();
     let incoming;
     let calendars = [];
+    let tasks = [];
     if (/^\s*BEGIN:VCALENDAR/.test(text)) {
       incoming = fromICS(text, uid);
     } else {
       const data = JSON.parse(text);
       incoming = (Array.isArray(data) ? data : data.events || []).map(normalizeEvent);
       calendars = (data.calendars || []).map(normalizeCalendar).filter(Boolean);
+      tasks = (data.tasks || []).map(normalizeTask).filter(Boolean);
     }
     incoming = incoming.filter(Boolean);
-    if (!incoming.length) return toast('В файле не найдено событий');
-    withUndo(`Импортировано событий: ${incoming.length}`, () => {
+    if (!incoming.length && !tasks.length) return toast('В файле не найдено событий');
+    withUndo(`Импортировано: событий ${incoming.length}${tasks.length ? `, задач ${tasks.length}` : ''}`, () => {
+      const tasksById = new Map(state.tasks.map((x) => [x.id, x]));
+      for (const task of tasks) tasksById.set(task.id, task);
+      state.tasks = [...tasksById.values()];
       for (const c of calendars) {
         const same = state.calendars.find((x) => x.id === c.id);
         if (same) Object.assign(same, c);
@@ -1194,7 +1482,9 @@ $('#importFile').addEventListener('change', async (e) => {
 
 /* ---------- Управление ---------- */
 
-$('#btnCreate').addEventListener('click', () => { closeNav(); openEditor(); });
+$('#btnSync').addEventListener('click', openSyncDialog);
+$('#btnSyncSide').addEventListener('click', openSyncDialog);
+$('#btnCreate').addEventListener('click', () => { closeNav(); if (state.view === 'tasks') openTaskEditor(); else openEditor(); });
 $('#btnToday').addEventListener('click', goToday);
 $('#btnPrev').addEventListener('click', () => go(-1));
 $('#btnNext').addEventListener('click', () => go(1));
@@ -1209,7 +1499,8 @@ $('#btnTheme').addEventListener('click', () => {
   renderFooter();
 });
 $('#viewSwitch').addEventListener('click', (e) => {
-  if (e.target.dataset.view) setView(e.target.dataset.view);
+  const btn = e.target.closest('[data-view]');
+  if (btn) setView(btn.dataset.view);
 });
 
 document.addEventListener('keydown', (e) => {
@@ -1222,7 +1513,8 @@ document.addEventListener('keydown', (e) => {
     KeyW: () => setView('week'),
     KeyD: () => setView('day'),
     KeyA: () => setView('agenda'),
-    KeyN: () => openEditor(),
+    KeyP: () => setView('tasks'),
+    KeyN: () => (state.view === 'tasks' ? openTaskEditor() : openEditor()),
     KeyQ: () => quickInput.focus(),
     ArrowLeft: () => go(-1),
     ArrowRight: () => go(1),
@@ -1260,6 +1552,8 @@ $('#view').addEventListener('touchend', (e) => {
 window.addEventListener('storage', (e) => {
   if (e.key === STORE_KEY) state.events = loadEvents();
   else if (e.key === CALS_KEY) state.calendars = loadCalendars();
+  else if (e.key === TASKS_KEY) state.tasks = loadTasks();
+  else if (e.key && e.key.startsWith('everyday-calendar:sync:')) return;
   else return;
   render();
 });
@@ -1274,6 +1568,9 @@ setInterval(() => {
   } else {
     for (const line of $$('.now-line')) line.style.top = `${nowTop()}px`;
     renderSideList();
+    const badge = taskBadgeCount();
+    $('#taskBadge').hidden = !badge;
+    $('#taskBadge').textContent = badge;
   }
   checkReminders();
 }, 30000);
@@ -1282,5 +1579,7 @@ if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
+initTasks();
 render();
 checkReminders();
+initSync();

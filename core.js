@@ -79,22 +79,39 @@ function endMinutes(ev) {
   return Math.min(e, 1440);
 }
 
+/** Сколько дней длится событие (многодневное — от date до endDate включительно). */
+const spanDays = (ev) => (ev.endDate && ev.endDate > ev.date ? dayDiff(fromKey(ev.date), fromKey(ev.endDate)) + 1 : 1);
+
 function compareOccurrences(a, b) {
-  return (a.ev.start ? 1 : 0) - (b.ev.start ? 1 : 0)
+  return (b.len > 1) - (a.len > 1)
+    || a.key.localeCompare(b.key)
+    || b.len - a.len
+    || (a.ev.start ? 1 : 0) - (b.ev.start ? 1 : 0)
     || (a.ev.start || '').localeCompare(b.ev.start || '')
     || a.ev.title.localeCompare(b.ev.title, 'ru');
 }
 
-/** Все вхождения событий в диапазоне дат (включительно): Map<'YYYY-MM-DD', [{ev, key}]>. */
+/**
+ * Все вхождения событий в диапазоне дат (включительно): Map<'YYYY-MM-DD', [{ ev, key, day, index, len }]>.
+ * key — день начала вхождения (по нему считаются исключения и привязанные задачи), day — день, на который
+ * оно попало, index — номер этого дня внутри многодневного события (0 — первый), len — длина в днях.
+ */
 function collect(events, from, to) {
   const map = new Map();
-  for (let d = from; d <= to; d = addDays(d, 1)) {
-    const key = toKey(d);
-    const list = [];
-    for (const ev of events) if (occursOn(ev, key, d)) list.push({ ev, key });
-    list.sort(compareOccurrences);
-    map.set(key, list);
+  for (let d = from; d <= to; d = addDays(d, 1)) map.set(toKey(d), []);
+  for (const ev of events) {
+    const len = spanDays(ev);
+    // Многодневное вхождение может начаться раньше диапазона и захватить его начало
+    for (let d = addDays(from, 1 - len); d <= to; d = addDays(d, 1)) {
+      const key = toKey(d);
+      if (!occursOn(ev, key, d)) continue;
+      for (let i = 0; i < len; i++) {
+        const list = map.get(toKey(addDays(d, i)));
+        if (list) list.push({ ev, key, day: toKey(addDays(d, i)), index: i, len });
+      }
+    }
   }
+  for (const list of map.values()) list.sort(compareOccurrences);
   return map;
 }
 
@@ -113,7 +130,7 @@ function nextOccurrence(ev, from, horizon = 800) {
 
 const MONTH_STEMS = [['янв', 0], ['фев', 1], ['мар', 2], ['апр', 3], ['мая', 4], ['май', 4], ['июн', 5], ['июл', 6], ['авг', 7], ['сен', 8], ['окт', 9], ['ноя', 10], ['дек', 11]];
 const WD_STEMS = [['пон', 0], ['пн', 0], ['вт', 1], ['ср', 2], ['чет', 3], ['чт', 3], ['пят', 4], ['пт', 4], ['суб', 5], ['сб', 5], ['вос', 6], ['вс', 6]];
-const WD_WORDS = 'понедельник|вторник|среду|среда|четверг|пятницу|пятница|субботу|суббота|воскресенье|пн|вт|ср|чт|пт|сб|вс';
+const WD_WORDS = 'понедельнику|вторнику|среде|четвергу|пятнице|субботе|воскресенью|понедельника|понедельник|вторника|вторник|среды|среду|среда|четверга|четверг|пятницы|пятницу|пятница|субботы|субботу|суббота|воскресенья|воскресенье|пн|вт|ср|чт|пт|сб|вс';
 
 const stemIndex = (stems, word) => {
   const w = (word || '').toLowerCase();
@@ -136,11 +153,16 @@ function applyPeriod(h, period) {
 
 /**
  * Разбирает фразу вида «завтра в 15 встреча с Аней» или «по пятницам с 19 до 21 спортзал».
- * Возвращает { title, date, start, end, repeat, allDay, tag, matched }: tag — метка категории из «#работа»,
- * matched показывает, что что-то распознано.
+ * Возвращает { title, date, endDate, spanDays, start, end, repeat, allDay, tag, priority, matched }:
+ * endDate — последний день многодневного события («с пятницы до воскресенья», «на выходных»),
+ * spanDays — длительность из «на 3 дня» (конец считается от даты начала), tag — метка категории из «#работа»,
+ * priority = 1 для «!» или «важно», matched показывает, что что-то распознано.
  */
 function parseQuick(input, base = today()) {
-  const r = { title: '', date: null, start: null, end: null, repeat: 'none', allDay: false, tag: null, matched: false };
+  const r = {
+    title: '', date: null, endDate: null, spanDays: 0, start: null, end: null,
+    repeat: 'none', allDay: false, tag: null, priority: 0, matched: false,
+  };
   let s = ` ${String(input).replace(/\s+/g, ' ').trim()} `;
   const PERIOD = '(?: (утра|дня|вечера|ночи))?';
 
@@ -157,9 +179,27 @@ function parseQuick(input, base = today()) {
   };
   const validTime = (h, m) => h >= 0 && h < 24 && m >= 0 && m < 60;
   const setDate = (d) => { if (!r.date) r.date = d; };
+  const makeDate = (d, mo, y) => {
+    let year = y ?? base.getFullYear();
+    let date = new Date(year, mo, d);
+    if (y == null && date < base) date = new Date(++year, mo, d);
+    return date.getDate() === d && date.getMonth() === mo ? date : null;
+  };
+  const fullYear = (y) => (y ? (y.length === 2 ? 2000 + +y : +y) : null);
+  const setRange = (a, b) => {
+    if (!a || !b) return false;
+    if (b < a) b = new Date(b.getFullYear() + 1, b.getMonth(), b.getDate()); // «с 28 декабря по 3 января»
+    setDate(a);
+    r.endDate = b;
+    return true;
+  };
 
   // Метка категории: «#работа»
   take('#([^\\s#,.!?;]+)', (m) => { r.tag = m[1]; });
+
+  // Важность: «!», «важно», «срочно» или восклицательный знак в конце
+  if (/!\s*$/.test(s)) { s = s.replace(/!+\s*$/, ' '); r.priority = 1; r.matched = true; }
+  take('!+|важно|срочно', () => { r.priority = 1; });
 
   // Повторы
   take('каждый день|ежедневно', () => { r.repeat = 'daily'; });
@@ -167,15 +207,56 @@ function parseQuick(input, base = today()) {
   take('каждую неделю|еженедельно', () => { r.repeat = 'weekly'; });
   take('каждый месяц|ежемесячно', () => { r.repeat = 'monthly'; });
   take('каждый год|ежегодно', () => { r.repeat = 'yearly'; });
-  take('(?:каждый|каждую|каждое|по) (понедельник(?:ам)?|вторник(?:ам)?|сред(?:у|ам)|четверг(?:ам)?|пятниц(?:у|ам)|суббот(?:у|ам)|воскресень(?:е|ям))', (m) => {
+  // «каждую пятницу», «по пятницам» (но не «по пятницу» — это конец периода «со среды по пятницу»)
+  take('(?:каждый|каждую|каждое) (понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)|по (понедельникам|вторникам|средам|четвергам|пятницам|субботам|воскресеньям)', (m) => {
     r.repeat = 'weekly';
-    setDate(nextWeekday(base, weekdayFromWord(m[1])));
+    setDate(nextWeekday(base, weekdayFromWord(m[1] || m[2])));
   });
 
   take('(?:на )?(?:весь|целый) день', () => { r.allDay = true; });
 
+  // Периоды на несколько дней. Идут до времени, чтобы «с 10 по 15 октября» не стало «с 10:00»
+  take(`со? (${WD_WORDS}) (?:по|до) (${WD_WORDS})`, (m) => {
+    const a = nextWeekday(base, weekdayFromWord(m[1]));
+    return setRange(a, nextWeekday(a, weekdayFromWord(m[2])));
+  });
+  take('с (\\d{1,2})\\.(\\d{1,2})(?:\\.(\\d{4}|\\d{2}))? (?:по|до) (\\d{1,2})\\.(\\d{1,2})(?:\\.(\\d{4}|\\d{2}))?', (m) => (
+    setRange(makeDate(+m[1], +m[2] - 1, fullYear(m[3])), makeDate(+m[4], +m[5] - 1, fullYear(m[6] || m[3])))
+  ));
+  take('с (\\d{1,2})(?: ([а-яё]+))? (?:по|до) (\\d{1,2}) ([а-яё]+)(?: (\\d{4}))?', (m) => {
+    const mo2 = monthFromWord(m[4]);
+    const mo1 = m[2] ? monthFromWord(m[2]) : mo2;
+    if (mo1 < 0 || mo2 < 0) return false;
+    const y = m[5] ? +m[5] : null;
+    return setRange(makeDate(+m[1], mo1, y), makeDate(+m[3], mo2, y));
+  });
+  take('(?:(?:на|в|во) )?(?:(следующие|следующих|эти|этих) )?выходн(?:ые|ых)', (m) => {
+    const next = m[1] && /след/i.test(m[1]);
+    const sat = next ? addDays(startOfWeek(base), 12) : (wdIndex(base) === 6 ? base : nextWeekday(base, 5));
+    setDate(sat);
+    if (wdIndex(sat) === 5) r.endDate = addDays(sat, 1);
+  });
+  take('(?:на )?(?:всю|целую) (?:(эту|следующую) )?неделю', (m) => {
+    if (m[1] && /след/i.test(m[1])) {
+      const mon = addDays(startOfWeek(base), 7);
+      setRange(mon, addDays(mon, 6));
+    } else {
+      setDate(base);
+      if (wdIndex(base) < 6) r.endDate = addDays(startOfWeek(base), 6);
+    }
+  });
+  take('до конца (недели|месяца)', (m) => {
+    r.endDate = m[1].toLowerCase() === 'недели' ? addDays(startOfWeek(base), 6) : new Date(base.getFullYear(), base.getMonth() + 1, 0);
+  });
+  take('на (?:(\\d+) )?(дн(?:я|ей)|день|недел(?:ю|и|ь))', (m) => {
+    const n = (m[1] ? +m[1] : 1) * (m[2].toLowerCase().startsWith('нед') ? 7 : 1);
+    if (n < 2 || n > 366) return false;
+    r.spanDays = n;
+  });
+
   // Интервалы времени
   take(`с (\\d{1,2})(?:[:.](\\d{2}))? до (\\d{1,2})(?:[:.](\\d{2}))?${PERIOD}`, (m) => {
+    if (monthFromWord(s.slice(m.index + m[0].length).trim().split(' ')[0]) >= 0) return false;
     let h1 = +m[1]; const m1 = +(m[2] || 0);
     let h2 = +m[3]; const m2 = +(m[4] || 0);
     if (m[5]) {
@@ -199,22 +280,19 @@ function parseQuick(input, base = today()) {
   // Время с предлогом: «в 15», «в 9:30», «к 7 вечера», «в полдень»
   if (!r.start) take('в полдень', () => { r.start = '12:00'; });
   if (!r.start) {
-    take(`(?:в|к) (\\d{1,2})(?:[:.](\\d{2}))?(?: ?(?:ч|час(?:а|ов)?))?${PERIOD}`, (m) => {
+    // После «до» точка означает дату («до 15.10»), поэтому минуты — только через двоеточие
+    take(`(?:(?:в|к) (\\d{1,2})(?:[:.](\\d{2}))?|до (\\d{1,2})(?::(\\d{2}))?(?![.\\d]))(?: ?(?:ч|час(?:а|ов)?))?${PERIOD}`, (m) => {
+      const hh = m[1] ?? m[3];
+      const mm = m[2] ?? m[4];
       const rest = s.slice(m.index + m[0].length).trim().split(' ')[0];
-      if (!m[2] && monthFromWord(rest) >= 0) return false; // «в 15 октября» — это дата
-      const h = applyPeriod(+m[1], m[3]); const min = +(m[2] || 0);
+      if (!mm && monthFromWord(rest) >= 0) return false; // «в 15 октября» — это дата
+      const h = applyPeriod(+hh, m[5]); const min = +(mm || 0);
       if (!validTime(h, min)) return false;
       r.start = `${pad(h)}:${pad(min)}`;
     });
   }
 
   // Даты
-  const makeDate = (d, mo, y) => {
-    let year = y ?? base.getFullYear();
-    let date = new Date(year, mo, d);
-    if (y == null && date < base) date = new Date(++year, mo, d);
-    return date.getDate() === d && date.getMonth() === mo ? date : null;
-  };
   take('(\\d{1,2})\\.(\\d{1,2})(?:\\.(\\d{4}|\\d{2}))?', (m) => {
     const y = m[3] ? (m[3].length === 2 ? 2000 + +m[3] : +m[3]) : null;
     const d = makeDate(+m[1], +m[2] - 1, y);
@@ -238,7 +316,7 @@ function parseQuick(input, base = today()) {
     else if (unit.startsWith('мес')) setDate(addMonths(base, n));
     else setDate(addDays(base, n));
   });
-  take(`(?:(во?|в следующ(?:ий|ую|ее)|в эт(?:от|у|о)) )?(${WD_WORDS})`, (m) => {
+  take(`(?:(во?|до|к|в следующ(?:ий|ую|ее)|в эт(?:от|у|о)) )?(${WD_WORDS})`, (m) => {
     const wd = weekdayFromWord(m[2]);
     if (m[1] && /след/i.test(m[1])) setDate(nextWeekday(addDays(startOfWeek(base), 7), wd));
     else setDate(nextWeekday(base, wd));
@@ -254,12 +332,13 @@ function parseQuick(input, base = today()) {
   }
 
   if (r.allDay) { r.start = null; r.end = null; }
+  if (r.endDate && r.date && r.endDate <= r.date) r.endDate = null;
   if (r.start && !r.end) r.end = fromMin(toMin(r.start) + 60);
   if (r.start && r.end && toMin(r.end) <= toMin(r.start)) r.end = fromMin(toMin(r.start) + 60);
 
   let title = s.replace(/\s+/g, ' ').trim()
-    .replace(/^(?:в|во|на|к)\s+/i, '')
-    .replace(/[\s,]+(?:в|во|на|к)$/i, '')
+    .replace(/^(?:в|во|на|к|до|с|со|по)\s+/i, '')
+    .replace(/[\s,]+(?:в|во|на|к|до|с|со|по)$/i, '')
     .replace(/^[,.\s-]+|[,\s-]+$/g, '');
   r.title = title ? title[0].toUpperCase() + title.slice(1) : '';
   return r;
@@ -277,10 +356,12 @@ function toICS(events, categoryOf) {
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Everyday Calendar//RU', 'CALSCALE:GREGORIAN'];
   for (const ev of events) {
     lines.push('BEGIN:VEVENT', `UID:${ev.id}@everyday-calendar`, `DTSTAMP:${now}`);
+    const last = ev.endDate && ev.endDate > ev.date ? ev.endDate : ev.date;
     if (ev.start) {
-      lines.push(`DTSTART:${icsDateTime(ev.date, ev.start)}`, `DTEND:${icsDateTime(ev.date, fromMin(endMinutes(ev)))}`);
+      lines.push(`DTSTART:${icsDateTime(ev.date, ev.start)}`, `DTEND:${icsDateTime(last, fromMin(endMinutes(ev)))}`);
     } else {
-      lines.push(`DTSTART;VALUE=DATE:${icsDate(ev.date)}`, `DTEND;VALUE=DATE:${icsDate(toKey(addDays(fromKey(ev.date), 1)))}`);
+      // В .ics конец события «на весь день» указывается следующим днём
+      lines.push(`DTSTART;VALUE=DATE:${icsDate(ev.date)}`, `DTEND;VALUE=DATE:${icsDate(toKey(addDays(fromKey(last), 1)))}`);
     }
     lines.push(`SUMMARY:${icsEscape(ev.title)}`);
     if (categoryOf) lines.push(`CATEGORIES:${icsEscape(categoryOf(ev))}`);
@@ -325,7 +406,11 @@ function fromICS(text, makeId) {
     if (line === 'BEGIN:VALARM') { inAlarm = true; continue; }
     if (line === 'END:VALARM') { inAlarm = false; continue; }
     if (line === 'END:VEVENT') {
-      if (cur && cur.date) out.push(cur);
+      if (cur && cur.date) {
+        if (cur.endKey && cur.endKey > cur.date) cur.endDate = cur.endKey;
+        delete cur.endKey;
+        out.push(cur);
+      }
       cur = null;
       continue;
     }
@@ -348,6 +433,7 @@ function fromICS(text, makeId) {
     } else if (name === 'DTEND') {
       const st = parseIcsStamp(value);
       if (st && st.time) cur.end = st.time;
+      if (st) cur.endKey = st.time ? st.date : toKey(addDays(fromKey(st.date), -1));
     } else if (name === 'EXDATE') {
       for (const v of value.split(',')) { const st = parseIcsStamp(v); if (st) cur.exdates.push(st.date); }
     } else if (name === 'RRULE') {
@@ -372,6 +458,7 @@ function normalizeEvent(e) {
     date: e.date,
     start,
     end: start ? time(e.end) : null,
+    endDate: /^\d{4}-\d{2}-\d{2}$/.test(e.endDate || '') && e.endDate > e.date ? e.endDate : null,
     repeat: REPEAT_LABELS[e.repeat] ? e.repeat : 'none',
     until: /^\d{4}-\d{2}-\d{2}$/.test(e.until || '') ? e.until : null,
     exdates: Array.isArray(e.exdates) ? e.exdates.filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x)) : [],
@@ -381,9 +468,41 @@ function normalizeEvent(e) {
   };
 }
 
+/* ---------- Задачи ---------- */
+
+/**
+ * Срок задачи: { date, time }. Если задача привязана к событию — это начало события
+ * (для повторяющегося — того вхождения, к которому привязана). Без срока — null.
+ */
+function taskDeadline(task, ev) {
+  if (task.eventId && ev) {
+    return { date: ev.repeat === 'none' ? ev.date : (task.eventKey || ev.date), time: ev.start || null };
+  }
+  return task.due ? { date: task.due, time: task.time || null } : null;
+}
+
+function normalizeTask(t) {
+  if (!t || typeof t !== 'object' || !t.id) return null;
+  const isKey = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+  const due = isKey(t.due) ? t.due : null;
+  return {
+    id: String(t.id),
+    title: String(t.title || 'Без названия').slice(0, 300),
+    due,
+    time: due && typeof t.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t.time) ? t.time : null,
+    cal: typeof t.cal === 'string' ? t.cal : '',
+    priority: t.priority ? 1 : 0,
+    done: Boolean(t.done),
+    doneAt: t.done && Number.isFinite(t.doneAt) ? t.doneAt : null,
+    eventId: t.eventId ? String(t.eventId) : null,
+    eventKey: t.eventId && isKey(t.eventKey) ? t.eventKey : null,
+    notes: String(t.notes || ''),
+  };
+}
+
 if (typeof module !== 'undefined') {
   module.exports = {
-    toKey, fromKey, addDays, addMonths, startOfWeek, wdIndex, toMin, fromMin, endMinutes,
-    occursOn, collect, nextOccurrence, parseQuick, toICS, fromICS, normalizeEvent,
+    toKey, fromKey, addDays, addMonths, startOfWeek, wdIndex, toMin, fromMin, endMinutes, spanDays,
+    occursOn, collect, nextOccurrence, parseQuick, toICS, fromICS, normalizeEvent, taskDeadline, normalizeTask,
   };
 }
