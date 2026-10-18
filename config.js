@@ -4,7 +4,7 @@
 // Секретный ключ (service_role / secret) сюда вписывать нельзя.
 window.SYNC_CONFIG = {
   supabaseUrl: 'https://dtwdhhyqseokmaliwkje.supabase.co',
-  supabaseKey: '',
+  supabaseKey: 'sb_publishable_AGIJCUp1NL8l8o_RdSrBDg_xjniP1Jn',
   // true — показать кнопку «Войти через Google» (нужно включить Google в Supabase → Authentication → Providers)
   google: false,
 };
