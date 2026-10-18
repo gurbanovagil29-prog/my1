@@ -17,7 +17,7 @@ test('статистика: часы по категориям, пересече
     ev({ title: 'b', date: '2026-10-19', start: '11:00', end: '13:00', cal: 'work' }),
     ev({ title: 'c', date: '2026-10-19', start: '11:00', end: '12:00', cal: 'study' }),
     ev({ title: 'весь день', date: '2026-10-20', cal: 'personal' }),
-    ev({ title: 'поездка', date: '2026-10-20', endDate: '2026-10-22', start: '10:00', end: '18:00', cal: 'personal' }),
+    ev({ title: 'поездка', date: '2026-10-20', endDate: '2026-10-22', start: '19:00', end: '18:00', cal: 'personal' }),
     ev({ title: 'спорт', date: '2026-10-19', start: '19:00', end: '20:30', repeat: 'daily', cal: 'personal' }),
   ];
   const tasks = [{ cal: 'study', plan: { date: '2026-10-21', start: '19:00', end: null } }];
@@ -70,4 +70,15 @@ test('запрос «найди 2 часа …»', () => {
   assert.equal(q('найди 2 ч 30 мин').duration, 150);
   assert.equal(q('окно в ремонт'), null);
   assert.equal(q('завтра в 15 встреча'), null);
+});
+
+test('многодневное с началом и концом — ежедневный блок; с концом раньше начала — сплошной отрезок', () => {
+  const work = ev({ title: 'работа', date: '2026-10-19', endDate: '2026-10-23', start: '09:00', end: '18:00', cal: 'work' });
+  const trip = ev({ title: 'поездка', date: '2026-10-23', endDate: '2026-10-25', start: '19:00', end: '18:00', cal: 'personal' });
+  assert.equal(ins.isDailySpan(work), true);
+  assert.equal(ins.isDailySpan(trip), false);
+  const st = ins.timeStats({ events: [work, trip], from: fromKey('2026-10-19'), to: fromKey('2026-10-25') });
+  assert.deepEqual(st.byCat, { work: 5 * 540 });
+  const slots = ins.findFreeSlots({ events: [work], keys: ['2026-10-20'], duration: 60, sleep: ['23:30', '07:00'], buffer: 0, max: 5 });
+  assert.deepEqual(show(slots), ['2026-10-20 07:00-08:00', '2026-10-20 18:00-19:00']);
 });

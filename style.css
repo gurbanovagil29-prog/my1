@@ -502,6 +502,7 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+.tg-hours span.is-first { transform: translateY(2px); }
 .tg-col {
   position: relative;
   border-left: 1px solid var(--line);
