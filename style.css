@@ -1005,6 +1005,25 @@ details.task-group[open] > summary::after { transform: rotate(90deg); }
 .mention-item small { color: var(--muted); white-space: nowrap; }
 .mention-empty { padding: 10px 12px; color: var(--muted); }
 
+/* ---------- Слой поверх календаря: подписи полос и линии связей ---------- */
+.view, .month, .tg-allday { position: relative; }
+.span-label {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  pointer-events: none;
+}
+.span-label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-layer { position: absolute; left: 0; top: 0; z-index: 6; overflow: visible; pointer-events: none; }
+.link-path { fill: none; stroke-width: 1.6; stroke-dasharray: 5 4; stroke-linecap: round; opacity: .85; }
+
 /* ---------- Синхронизация ---------- */
 .sync-btn { font-size: 17px; color: var(--muted); }
 .sync-btn[data-status="ok"] { color: #30a46c; }
@@ -1102,6 +1121,7 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: va
   .chip, .chip-spacer { height: 15px; }
   .chip.is-span { margin: 0 -3px; padding-left: 4px; }
   .chip.is-span.span-head { padding-left: 4px; }
+  .span-label { font-size: 10px; padding: 0 3px; }
   .chip::before, .chip-time { display: none; }
   .chip.is-task .task-check, .chip .ev-progress { display: none; }
   .chip.is-task { border-style: dashed; }

@@ -10,7 +10,7 @@
    refreshAlarms, runLocalAlarms, enableReminders, notifyStatusText, quietLabel, initReminders, initTaskReminderFields,
    setEditorReminds, editorReminds, reminderFromParse, describeReminder, userTz, quietHours, iso,
    plansByDay, planBlock, planChip, movePlan, planLabel, syncLinkedTaskDeadlines, mentionTargets, mentionSlug, normalizePlan, deadlineHint,
-   upcomingOccurrences */
+   upcomingOccurrences, scheduleOverlays, initOverlays */
 
 const STORE_KEY = 'everyday-calendar:events';
 const SETTINGS_KEY = 'everyday-calendar:settings';
@@ -281,6 +281,7 @@ function render() {
   renderCalendars();
   renderSideList();
   renderFooter();
+  scheduleOverlays();
 }
 
 function setView(v) {
@@ -350,7 +351,7 @@ function renderMonth() {
   const lanesByDay = new Map();
   for (let w = 0; w < weeks; w++) {
     const days = Array.from({ length: 7 }, (_, i) => addDays(start, w * 7 + i));
-    spanLanes(days, map).forEach((slots, i) => lanesByDay.set(toKey(days[i]), slots));
+    spanLanes(days, map, `w${w}`).forEach((slots, i) => lanesByDay.set(toKey(days[i]), slots));
   }
 
   const grid = h('div', { class: 'month', style: { gridTemplateRows: `auto repeat(${weeks}, minmax(0, 1fr))` } },
@@ -436,7 +437,7 @@ function renderDayPanel(d) {
  * чтобы одно событие занимало одну и ту же строку во всех своих днях. Возвращает для каждого дня массив дорожек:
  * вхождение с пометками segStart/segEnd (начало и конец полосы в этом ряду) или null.
  */
-function spanLanes(days, map) {
+function spanLanes(days, map, rowId = 'row') {
   const items = new Map();
   days.forEach((d, i) => {
     for (const o of map.get(toKey(d))) {
@@ -454,14 +455,25 @@ function spanLanes(days, map) {
     let lane = laneEnds.findIndex((endIdx) => endIdx < it.from);
     if (lane < 0) { lane = laneEnds.length; laneEnds.push(-1); }
     laneEnds[lane] = it.to;
-    for (let i = it.from; i <= it.to; i++) perDay[i][lane] = { ...it.days[i], segStart: i === it.from, segEnd: i === it.to };
+    const segId = `${it.days[it.from].ev.id}@${it.days[it.from].key}#${rowId}`;
+    for (let i = it.from; i <= it.to; i++) perDay[i][lane] = { ...it.days[i], segId, segStart: i === it.from, segEnd: i === it.to };
   }
   return perDay.map((slots) => Array.from({ length: laneEnds.length }, (_, i) => slots[i] || null));
 }
 
 /** Полоса многодневного события: название в начале каждого ряда, скруглены настоящие начало и конец. */
+/** Полоса многодневного события. Название рисует overlays.js — по центру всей полосы, через клетки. */
 function spanChip(o) {
-  const { ev, key, index, len, segStart } = o;
+  const { ev, key, index, len, segStart, segEnd, segId } = o;
+  const progress = linkedTasks(ev, key);
+  const label = [
+    index > 0 && segStart ? '‹ ' : '',
+    ev.repeat !== 'none' ? '↻ ' : '',
+    ev.start && index === 0 ? `${ev.start} ` : '',
+    ev.title,
+    progress.length ? `  ✓${progress.filter((t) => t.done).length}/${progress.length}` : '',
+    segEnd && index < len - 1 ? ' ›' : '',
+  ].join('');
   const cls = ['chip', 'is-span'];
   if (index === 0) cls.push('span-head');
   if (index === len - 1) cls.push('span-tail');
@@ -471,12 +483,12 @@ function spanChip(o) {
     role: 'button',
     tabindex: '0',
     style: { '--c': colorOf(ev) },
+    'aria-label': segStart ? label : null,
+    dataset: { ev: `${ev.id}|${key}`, seg: segId, ...(segStart ? { segStart: '1', label } : {}), ...(segEnd ? { segEnd: '1' } : {}) },
     title: `${ev.title}\n${formatTime(ev, key)} · ${calOf(ev).name}${ev.repeat !== 'none' ? ` · ${REPEAT_LABELS[ev.repeat]}` : ''}`,
     onclick: (e) => { e.stopPropagation(); openEditor({ ev, key }); },
     onkeydown: (e) => { if (e.key === 'Enter') { e.stopPropagation(); openEditor({ ev, key }); } },
-  }, segStart
-    ? [h('span', { class: 'chip-title' }, index > 0 ? '‹ ' : '', ev.repeat !== 'none' ? '↻ ' : '', ev.start && index === 0 ? `${ev.start} ` : '', ev.title), progressBadge(ev, key)]
-    : h('span', { class: 'chip-title' }, '\u00a0'));
+  }, h('span', { class: 'chip-title' }, '\u00a0'));
   makeDraggable(el, ev, index);
   return el;
 }
@@ -486,6 +498,7 @@ function chip({ ev, key }) {
     class: `chip${ev.start ? '' : ' is-allday'}${isPast(ev, key) ? ' is-past' : ''}`,
     role: 'button',
     tabindex: '0',
+    dataset: { ev: `${ev.id}|${key}` },
     style: { '--c': colorOf(ev) },
     title: `${ev.title}\n${formatTime(ev, key)} · ${calOf(ev).name}${ev.repeat !== 'none' ? ` · ${REPEAT_LABELS[ev.repeat]}` : ''}`,
     onclick: (e) => { e.stopPropagation(); openEditor({ ev, key }); },
@@ -601,6 +614,7 @@ function eventBlock(it) {
     class: `tg-ev${e - s < 45 ? ' is-short' : ''}${isPast(ev, key) ? ' is-past' : ''}`,
     role: 'button',
     tabindex: '0',
+    dataset: { ev: `${ev.id}|${key}` },
     style: {
       '--c': colorOf(ev),
       top: `${(s / 60) * HOUR_H}px`,
@@ -881,6 +895,7 @@ function renderFooter() {
   $('#btnTheme').textContent = `Тема: ${{ auto: 'как в системе', light: 'светлая', dark: 'тёмная' }[theme]}`;
   $('#btnNotify').textContent = notifyStatusText();
   $('#btnQuiet').textContent = quietLabel();
+  $('#btnLinks').textContent = `🔗 Линии связей: ${state.settings.links === false ? 'выкл' : 'вкл'}`;
 }
 
 function applyTheme() {
@@ -1524,6 +1539,11 @@ document.addEventListener('click', (e) => {
 /* ---------- Напоминания ---------- */
 
 $('#btnNotify').addEventListener('click', enableReminders);
+$('#btnLinks').addEventListener('click', () => {
+  state.settings.links = state.settings.links === false;
+  saveSettings();
+  render();
+});
 
 /* ---------- Экран уведомлений ---------- */
 
@@ -1731,6 +1751,7 @@ if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
 
 initTasks();
 initTaskReminderFields();
+initOverlays();
 render();
 initReminders();
 runLocalAlarms();
