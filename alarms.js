@@ -221,9 +221,10 @@ function alarmText(kind, item, at, now, tz) {
     let body = 'Отметьте, когда сделаете';
     if (item.due) {
       const deadline = zonedMs(item.due, item.time || '23:59', tz);
-      body = deadline < now
-        ? `Срок прошёл: ${dayLabel(item.due, now, tz)}${item.time ? `, ${item.time}` : ''}`
-        : `Срок: ${dayLabel(item.due, now, tz)}${item.time ? `, ${item.time}` : ''}`;
+      const when = `${dayLabel(item.due, now, tz)}${item.time ? `, ${item.time}` : ''}`;
+      // В пределах 5 минут от срока — «Срок: сейчас», позже — «Срок прошёл»
+      if (item.time && Math.abs(now - deadline) < 5 * MINUTE) body = `Срок: сейчас, ${item.time}`;
+      else body = deadline < now ? `Срок прошёл: ${when}` : `Срок: ${when}`;
     }
     // Напоминание в начале блока «Когда делаю»
     const planStart = item.plan?.start ? zonedMs(item.plan.date, item.plan.start, tz) : null;

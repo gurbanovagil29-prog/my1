@@ -44,6 +44,10 @@ const db = {
   async deleteSubscription(endpoint) { await rest(`push_subscriptions?endpoint=eq.${q(endpoint)}`, { method: 'DELETE' }); },
   async getItem(u, k, id) { return (await rest(`items?select=user_id,kind,id,data&${itemFilter(u, k, id)}&deleted=is.false`))[0] || null; },
   async updateItem(u, k, id, data) { await rest(`items?${itemFilter(u, k, id)}`, { method: 'PATCH', body: { data } }); },
+  async userFromToken(token) {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${token}` } });
+    return res.ok ? (await res.json()).id || null : null;
+  },
 };
 
 const server = createReminderServer({
@@ -61,12 +65,16 @@ const CORS = {
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
 
 // GET — публичный ключ для подписки браузера; POST от расписания — разослать напоминания;
-// POST с action — кнопка «Сделал» / «Отложить» из уведомления
+// POST с action — кнопка «Сделал» / «Отложить» из уведомления; action: 'test' — «Проверить push» (нужен вход в аккаунт)
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
   try {
     if (req.method === 'GET') return json({ publicKey: await server.publicKey() });
     const body = await req.json().catch(() => ({}));
+    if (body.action === 'test') {
+      const r = await server.testPush((req.headers.get('authorization') || '').replace(/^Bearer\s+/i, ''));
+      return json(r.body, r.status);
+    }
     if (body.action === 'done' || body.action === 'snooze') {
       const r = await server.action(body);
       return json(r.body, r.status);

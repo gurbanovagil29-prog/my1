@@ -152,6 +152,10 @@ test('тексты уведомлений', () => {
   const t = normalizeTask({ id: 't', title: 'Отчёт', due: '2026-10-19', time: '12:00' });
   assert.equal(a.alarmText('task', t, now, now, TZ).body, 'Срок прошёл: сегодня, 12:00');
   assert.equal(a.alarmText('task', t, now, now, TZ).title, '☑ Отчёт');
+  // Ровно в срок (и в пределах 5 минут) — «Срок: сейчас», а не «Срок прошёл»
+  const due = normalizeTask({ id: 'd', title: 'Покушать', due: '2026-10-19', time: '23:10' });
+  assert.equal(a.alarmText('task', due, at('2026-10-19', '23:10'), at('2026-10-19', '23:10'), TZ).body, 'Срок: сейчас, 23:10');
+  assert.equal(a.alarmText('task', due, at('2026-10-19', '23:20'), at('2026-10-19', '23:20'), TZ).body, 'Срок прошёл: сегодня, 23:10');
 });
 
 test('«когда делаю»: напоминание в начале блока и за час до срока', () => {

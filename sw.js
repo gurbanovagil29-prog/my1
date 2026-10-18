@@ -1,5 +1,5 @@
 // Офлайн-режим: файлы приложения хранятся в кэше на случай, если сети нет.
-const CACHE = 'everyday-calendar-v12';
+const CACHE = 'everyday-calendar-v13';
 const ASSETS = [
   './', 'index.html', 'style.css', 'config.js', 'core.js', 'alarms.js', 'insights.js', 'sync.js', 'tasks.js', 'reminders-ui.js', 'overlays.js', 'insights-ui.js', 'app.js',
   'vendor/supabase-2.117.2.js', 'manifest.webmanifest', 'icon.svg',
@@ -48,9 +48,11 @@ self.addEventListener('push', (e) => {
   } catch {
     d = { title: 'Календарь', body: e.data ? e.data.text() : '' };
   }
-  const actions = d.kind === 'task'
-    ? [{ action: 'done', title: '✓ Сделал' }, { action: 'snooze15', title: 'Через 15 мин' }]
-    : [{ action: 'snooze15', title: 'Через 15 мин' }];
+  // Без kind — тестовое уведомление «Проверить push»: без кнопок
+  const actions = !d.kind ? []
+    : d.kind === 'task'
+      ? [{ action: 'done', title: '✓ Сделал' }, { action: 'snooze15', title: 'Через 15 мин' }]
+      : [{ action: 'snooze15', title: 'Через 15 мин' }];
   e.waitUntil(Promise.all([
     self.registration.showNotification(d.title, {
       body: d.body, tag: d.tag, renotify: true, icon: 'icon.svg', badge: 'icon.svg', data: d, actions,

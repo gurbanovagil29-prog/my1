@@ -258,6 +258,54 @@ async function enableReminders() {
   renderFooter();
 }
 
+/* ---------- «Проверить push» ---------- */
+
+/** Проверяет всю цепочку по шагам и просит сервер прислать тестовое уведомление. Отвечает, где сбой. */
+async function testPush() {
+  closeNav();
+  const say = (text, ok = false) => toast(`${ok ? '✅' : '⚠️'} ${text}`, { duration: ok ? 8000 : 12000 });
+  if (!('Notification' in window) || !('PushManager' in window)) {
+    return say(/iPhone|iPad/.test(navigator.userAgent)
+      ? 'Push на iPhone работает только в календаре, открытом с экрана «Домой» (iOS 16.4+)'
+      : 'Этот браузер не поддерживает push-уведомления');
+  }
+  if (Notification.permission !== 'granted') return say('Уведомления не разрешены. Нажмите «🔔 Включить push-напоминания» и разрешите их');
+  if (!sync.user) return say('Войдите в аккаунт (☁): push приходят через сервер, ему нужно знать, чьи это напоминания');
+  await detectPushServer();
+  if (!push.server) return say('Функция «remind» в Supabase не отвечает. Проверьте, что она развёрнута под этим именем и у неё выключен Verify JWT');
+  let endpoint;
+  try {
+    await subscribePush();
+    endpoint = (await currentSubscription())?.endpoint;
+  } catch (err) {
+    return say(`Не удалось подписать это устройство: ${err.message || err}`);
+  }
+  toast('Отправляю тестовое уведомление…', { duration: 3000 });
+  let data;
+  try {
+    const { data: { session } } = await sync.client.auth.getSession();
+    const res = await fetch(push.server.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token || ''}`, apikey: window.SYNC_CONFIG.supabaseKey },
+      body: JSON.stringify({ action: 'test' }),
+    });
+    data = await res.json().catch(() => null);
+    if (res.status === 401) return say('Сервер не узнал аккаунт. Выйдите и войдите снова (☁)');
+    if (!res.ok) return say(`Функция «remind» ответила ошибкой ${res.status}: ${data?.error || 'нет подробностей'}. Загляните в Supabase → Edge Functions → remind → Logs`);
+  } catch (err) {
+    return say(`Нет связи с сервером: ${err.message || err}`);
+  }
+  if (!data || data.devices == null) return say('В Supabase старая версия функции «remind». Вставьте в неё новый код из supabase/functions/remind/index.ts и нажмите Deploy');
+  const mine = (data.results || []).find((r) => r.endpoint === endpoint);
+  if (mine && !mine.ok) {
+    const why = mine.status === 403 || mine.status === 401 ? 'сервис уведомлений отклонил подпись сервера'
+      : mine.status === 404 || mine.status === 410 ? 'подписка устройства устарела — нажмите «Проверить push» ещё раз'
+        : `ошибка ${mine.status}${mine.error ? `: ${mine.error}` : ''}`;
+    return say(`Сервер не смог отправить уведомление на это устройство: ${why}`);
+  }
+  say(`Сервер отправил уведомление (устройств в аккаунте: ${data.devices}, доставлено в сервис push: ${data.sent}). Если баннер не появился в течение минуты — проверьте, что уведомления для календаря разрешены в настройках телефона`, true);
+}
+
 function notifyStatusText() {
   if (!('Notification' in window)) return '🔕 Уведомления недоступны в этом браузере';
   if (Notification.permission === 'denied') return '🔕 Уведомления запрещены';
@@ -279,6 +327,7 @@ function applyAlarmAction(action, kind, id) {
 }
 
 function initReminders() {
+  $('#btnPushTest').addEventListener('click', testPush);
   navigator.serviceWorker?.addEventListener('message', (e) => {
     const m = e.data || {};
     if (m.type === 'alarm' && m.alarm) showAlarm(m.alarm.kind, m.alarm.id);

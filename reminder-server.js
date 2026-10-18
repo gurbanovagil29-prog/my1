@@ -10,6 +10,7 @@
  *   subscriptions(userIds) → [{ endpoint, user_id, p256dh, auth, tz }],
  *   claim(row, oldAlarmAt, data) → bool,                            — обновить, только если alarmAt не изменился
  *   deleteSubscription(endpoint), getItem(userId, kind, id) → row | null, updateItem(userId, kind, id, data),
+ *   userFromToken(accessToken) → userId | null,                    — кто прислал запрос (вход в аккаунт)
  * }
  * push(subscription, payloadString, vapid) → Response
  */
@@ -115,7 +116,29 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
     return { status: 200, body: { ok: true } };
   }
 
-  return { publicKey, runDue, action, sign };
+  /** Кнопка «Проверить push»: тестовое уведомление на все устройства пользователя и отчёт по каждому. */
+  async function testPush(accessToken) {
+    const userId = accessToken ? await db.userFromToken(accessToken) : null;
+    if (!userId) return { status: 401, body: { error: 'not signed in' } };
+    const subs = await db.subscriptions([userId]);
+    const k = await keys();
+    const vapid = { publicKey: k.public_key, privateJwk: k.private_jwk, subject };
+    const payload = JSON.stringify({ title: '🔔 Проверка', body: 'Push-уведомления работают', tag: 'push-test' });
+    const results = [];
+    for (const s of subs) {
+      try {
+        const res = await push(s, payload, vapid);
+        if (res.status === 404 || res.status === 410) await db.deleteSubscription(s.endpoint);
+        const detail = !res.ok && typeof res.text === 'function' ? await res.text().catch(() => '') : '';
+        results.push({ endpoint: s.endpoint, status: res.status, ok: res.ok, error: detail ? detail.slice(0, 200) : null });
+      } catch (err) {
+        results.push({ endpoint: s.endpoint, status: 0, ok: false, error: String(err?.message || err) });
+      }
+    }
+    return { status: 200, body: { devices: subs.length, sent: results.filter((r) => r.ok).length, results } };
+  }
+
+  return { publicKey, runDue, action, sign, testPush };
 }
 
 if (typeof module !== 'undefined') {
