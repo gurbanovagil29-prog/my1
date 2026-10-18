@@ -10,7 +10,8 @@
    refreshAlarms, runLocalAlarms, enableReminders, notifyStatusText, quietLabel, initReminders, initTaskReminderFields,
    setEditorReminds, editorReminds, reminderFromParse, describeReminder, userTz, quietHours, iso,
    plansByDay, planBlock, planChip, movePlan, planLabel, syncLinkedTaskDeadlines, mentionTargets, mentionSlug, normalizePlan, deadlineHint,
-   upcomingOccurrences, scheduleOverlays, initOverlays, isDailySpan, initInsights, openSlots, quickSlotQuery, quickSlotPreview, slotSettingsLabel */
+   upcomingOccurrences, scheduleOverlays, initOverlays, isDailySpan,
+   layerCal, visibleLayerEvents, openFriendEvent, renderFriends, layerChips, initFriends, initInsights, openSlots, quickSlotQuery, quickSlotPreview, slotSettingsLabel */
 
 const STORE_KEY = 'everyday-calendar:events';
 const SETTINGS_KEY = 'everyday-calendar:settings';
@@ -102,9 +103,14 @@ function saveCalendars() {
 
 /* ---------- Календари (категории) ---------- */
 
-const calOf = (ev) => state.calendars.find((c) => c.id === ev.cal) || state.calendars[0];
+// У события друга (ev.friend) «категория» — его слой: свой цвет и переключатель
+const calOf = (ev) => (ev.friend ? layerCal(ev.friend) : state.calendars.find((c) => c.id === ev.cal) || state.calendars[0]);
 const colorOf = (ev) => calOf(ev).color;
-const visibleEvents = () => state.events.filter((ev) => calOf(ev).visible);
+/** Видимые события; withFriends — вместе с включёнными календарями друзей (только для просмотра). */
+const visibleEvents = (withFriends = true) => [
+  ...state.events.filter((ev) => calOf(ev).visible),
+  ...(withFriends ? visibleLayerEvents() : []),
+];
 
 /** Календарь для новых событий: первый включённый (если смотрите только «Работу», новое пойдёт туда). */
 const defaultCal = () => (state.calendars.find((c) => c.visible) || state.calendars[0]).id;
@@ -291,6 +297,7 @@ function render() {
   renderMini();
   renderCalendars();
   renderSideList();
+  renderFriends();
   renderFooter();
   scheduleOverlays();
 }
@@ -809,6 +816,7 @@ function eventBlock(it) {
   }, h('div', { class: 'tg-ev-title' }, ev.repeat !== 'none' ? '↻ ' : '', ev.title, ' ', progressBadge(ev, key)), time);
   makeDraggable(el, ev, index);
 
+  if (ev.friend) return el;
   // Потянуть за нижний край — изменить длительность (для повторов меняется вся серия)
   const handle = h('div', { class: 'tg-resize', title: 'Потяните, чтобы изменить длительность' });
   handle.addEventListener('pointerdown', (pd) => {
@@ -852,7 +860,7 @@ let drag = null;
 
 /** dayIndex — какой по счёту день многодневного события тянут: событие сдвигается целиком. */
 function makeDraggable(el, ev, dayIndex = 0) {
-  if (ev.repeat !== 'none') return; // повторяющиеся меняются через форму
+  if (ev.repeat !== 'none' || ev.friend) return; // повторяющиеся меняются через форму, чужие — никак
   el.draggable = true;
   el.addEventListener('dragstart', (e) => {
     if (resizing) { e.preventDefault(); return; }
@@ -1037,12 +1045,12 @@ function renderCalendars() {
     'aria-pressed': String(c.visible),
     style: { '--c': c.color },
     onclick: () => toggleCalendar(c.id),
-  }, c.name)));
+  }, c.name)), ...layerChips());
 }
 
 function renderSideList() {
   const t = today();
-  const map = collect(visibleEvents(), t, addDays(t, 1));
+  const map = collect(visibleEvents(false), t, addDays(t, 1));
   const tasks = tasksByDay(t, addDays(t, 1));
   const plans = plansByDay(t, addDays(t, 1));
   const section = (label, key) => {
@@ -1134,6 +1142,7 @@ function defaultStart(dateKey) {
 }
 
 function openEditor({ ev = null, key = null, preset = {} } = {}) {
+  if (ev?.friend) return openFriendEvent(ev, key); // событие друга — только просмотр
   editing = { id: ev ? ev.id : null, key, pendingTasks: [] };
   let v;
   if (ev) {
@@ -1959,6 +1968,7 @@ initTasks();
 initTaskReminderFields();
 initOverlays();
 initInsights();
+initFriends();
 render();
 initReminders();
 runLocalAlarms();
