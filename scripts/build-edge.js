@@ -9,7 +9,7 @@ const path = require('node:path');
 
 const root = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(root, f), 'utf8').replace(/^'use strict';\n/, '');
-const SERVER_SOURCES = ['alarms.js', 'webpush.js', 'reminder-server.js', 'scripts/edge-entry.js'];
+const SERVER_SOURCES = ['alarms.js', 'webpush.js', 'digest.js', 'phrase.js', 'reminder-server.js', 'scripts/edge-entry.js'];
 const OUT = 'supabase/functions/remind/index.ts';
 
 /** Делит файл на объявления верхнего уровня: { name, code } (комментарий над объявлением идёт вместе с ним). */
@@ -63,7 +63,7 @@ function build() {
   return [
     '// @ts-nocheck',
     '// Серверная функция напоминаний календаря. Сгенерировано scripts/build-edge.js — не правьте вручную,',
-    '// а измените исходники (core.js, alarms.js, webpush.js, reminder-server.js, scripts/edge-entry.js) и запустите npm run build:edge.',
+    '// а измените исходники (core.js, alarms.js, webpush.js, digest.js, phrase.js, reminder-server.js, scripts/edge-entry.js) и запустите npm run build:edge.',
     '',
     '// ===== core.js (нужная серверу часть) =====',
     pickFromCore(server),

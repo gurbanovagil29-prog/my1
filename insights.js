@@ -9,7 +9,7 @@
  * и блоки «Когда делаю» у задач (без конца — час). События на весь день время не занимают.
  */
 
-/* global fromKey, addDays, toMin, endMinutes, collect, startOfWeek, parseQuick */
+/* global fromKey, toKey, addDays, toMin, endMinutes, collect, startOfWeek, parseQuick, spanDays, fromMin */
 
 /**
  * Многодневное событие с началом и концом в пределах дня («всю неделю с 9 до 18 работа») —
@@ -136,6 +136,37 @@ function findFreeSlots({ events, tasks = [], keys, duration, sleep, buffer = 15,
     .sort((a, b) => a.key.localeCompare(b.key) || a.start - b.start);
 }
 
+/* ---------- Пересечения ---------- */
+
+/**
+ * С чем пересекается новое событие (первое вхождение; многодневное — до двух недель):
+ * [{ title, start, end, date }]. Учитываются события со временем и блоки «Когда делаю».
+ */
+function findConflicts(candidate, { events, tasks = [], excludeId = null }) {
+  if (!candidate || !candidate.start || !candidate.date) return [];
+  const len = Math.min(spanDays(candidate), 14);
+  const others = events.filter((e) => e.id !== excludeId);
+  const out = [];
+  const seen = new Set();
+  for (let i = 0; i < len; i++) {
+    const key = toKey(addDays(fromKey(candidate.date), i));
+    const mine = occurrenceMinutes({ ev: candidate, index: i, len: spanDays(candidate) });
+    if (!mine) continue;
+    const busy = [
+      ...(collect(others, fromKey(key), fromKey(key)).get(key) || []).map((o) => ({ title: o.ev.title, iv: occurrenceMinutes(o) })),
+      ...tasks.filter((t) => t.id !== excludeId && !t.done && t.plan && t.plan.date === key).map((t) => ({ title: `☑ ${t.title}`, iv: planMinutes(t.plan) })),
+    ];
+    for (const b of busy) {
+      if (!b.iv || b.iv[0] >= mine[1] || mine[0] >= b.iv[1]) continue;
+      const id = `${b.title}|${key}|${b.iv[0]}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push({ title: b.title, date: key, start: fromMin(b.iv[0]), end: b.iv[1] >= 1440 ? '24:00' : fromMin(b.iv[1]) });
+    }
+  }
+  return out;
+}
+
 /* ---------- Фраза «найди 2 часа на этой неделе» ---------- */
 
 const SLOT_TRIGGER = /^\s*(?:найди|найти|найдите|поищи|ищи|подбери|свободн(?:о|ое|ые|ый)(?: (?:время|окно|окна))?|окно)(?=\s|$)/i;
@@ -204,7 +235,7 @@ function parseSlotQuery(input, base) {
 
 if (typeof module !== 'undefined') {
   module.exports = {
-    isDailySpan, occurrenceMinutes, planMinutes, mergeIntervals, timeStats, awakeIntervals, subtractIntervals,
+    isDailySpan, occurrenceMinutes, planMinutes, findConflicts, mergeIntervals, timeStats, awakeIntervals, subtractIntervals,
     findFreeSlots, slotDuration, parseSlotQuery,
   };
 }

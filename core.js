@@ -523,6 +523,12 @@ function normalizeEvent(e) {
     alarmSig: typeof e.alarmSig === 'string' ? e.alarmSig : null,
     alarmLast: isIsoOrNull(e.alarmLast),
     notes: String(e.notes || ''),
+    // Закреплено в обратном отсчёте «⏳ До защиты 4 дня»
+    pin: e.pin === true,
+    // Копия события, на которое пригласил друг: { id приглашения, owner, ownerName, cancelled }
+    invite: e.invite && typeof e.invite === 'object' && typeof e.invite.id === 'string'
+      ? { id: e.invite.id, owner: String(e.invite.owner || ''), ownerName: String(e.invite.ownerName || ''), cancelled: e.invite.cancelled === true }
+      : null,
   };
 }
 

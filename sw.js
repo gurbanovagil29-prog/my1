@@ -1,7 +1,7 @@
 // Офлайн-режим: файлы приложения хранятся в кэше на случай, если сети нет.
-const CACHE = 'everyday-calendar-v14';
+const CACHE = 'everyday-calendar-v15';
 const ASSETS = [
-  './', 'index.html', 'style.css', 'config.js', 'core.js', 'alarms.js', 'insights.js', 'sharing.js', 'sync.js', 'tasks.js', 'reminders-ui.js', 'overlays.js', 'insights-ui.js', 'friends.js', 'app.js',
+  './', 'index.html', 'style.css', 'config.js', 'core.js', 'alarms.js', 'insights.js', 'sharing.js', 'sync.js', 'tasks.js', 'reminders-ui.js', 'overlays.js', 'insights-ui.js', 'friends.js', 'invites.js', 'notify-settings.js', 'onboarding.js', 'share-image.js', 'app.js',
   'vendor/supabase-2.117.2.js', 'manifest.webmanifest', 'icon.svg',
 ];
 
@@ -48,11 +48,12 @@ self.addEventListener('push', (e) => {
   } catch {
     d = { title: 'Календарь', body: e.data ? e.data.text() : '' };
   }
-  // Без kind — тестовое уведомление «Проверить push»: без кнопок
-  const actions = !d.kind ? []
-    : d.kind === 'task'
-      ? [{ action: 'done', title: '✓ Сделал' }, { action: 'snooze15', title: 'Через 15 мин' }]
-      : [{ action: 'snooze15', title: 'Через 15 мин' }];
+  // Без kind — тестовое уведомление «Проверить push», сводка и ответы на приглашения — без кнопок
+  const actions = !d.kind || d.kind === 'digest' ? []
+    : d.kind === 'invite' ? (d.token ? [{ action: 'accept', title: '✓ Приду' }, { action: 'decline', title: '✕ Не смогу' }] : [])
+      : d.kind === 'task'
+        ? [{ action: 'done', title: '✓ Сделал' }, { action: 'snooze15', title: 'Через 15 мин' }]
+        : [{ action: 'snooze15', title: 'Через 15 мин' }];
   e.waitUntil(Promise.all([
     self.registration.showNotification(d.title, {
       body: d.body, tag: d.tag, renotify: true, icon: 'icon.svg', badge: 'icon.svg', data: d, actions,
@@ -68,6 +69,28 @@ self.addEventListener('notificationclick', (e) => {
   const action = e.action;
   e.waitUntil((async () => {
     const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    // Приглашение: ответ кнопкой сразу уходит на сервер; без кнопки — открыть карточку приглашения
+    if (d.kind === 'invite') {
+      if ((action === 'accept' || action === 'decline') && d.token && d.actionUrl) {
+        try {
+          const res = await fetch(d.actionUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, user: d.user, type: 'invite', id: d.id, token: d.token }),
+          });
+          if (res.ok) return;
+        } catch {
+          // Нет сети — откроем карточку
+        }
+      }
+      await self.clients.openWindow(`./?invite=${d.id}`);
+      return;
+    }
+    if (d.kind === 'digest') {
+      if (list[0]) await list[0].focus();
+      else await self.clients.openWindow('./');
+      return;
+    }
     if ((action === 'done' || action === 'snooze15') && d.kind) {
       if (d.token && d.actionUrl) {
         // Кнопка в уведомлении работает и при закрытом календаре: сразу сообщаем серверу
