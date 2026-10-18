@@ -375,7 +375,8 @@ function renderTaskReminderDraft(taskLike) {
   const hint = [];
   if (next) hint.push(`Следующее: ${fmtMoment(next)}`);
   if (rule) hint.push(describeReminder(rule, now, userTz()));
-  else if (taskLike.time && taskLike.due) hint.push('Своих напоминаний нет — напомню за час до срока');
+  else if (taskLike.plan?.start) hint.push(`напомню в ${taskLike.plan.start}${taskLike.time ? ' и за час до срока, если не сделано' : ''}`);
+  else if (taskLike.time && taskLike.due && !taskLike.eventId) hint.push('Своих напоминаний нет — напомню за час до срока');
   $('#tRemindHint').textContent = hint.filter(Boolean).join(' · ');
 }
 
@@ -426,5 +427,5 @@ function initTaskReminderFields() {
     $('#tAtInput').value = '';
     update();
   });
-  for (const id of ['#tEvery', '#tWinFrom', '#tWinTo', '#tDue', '#tTime']) $(id).addEventListener('change', update);
+  for (const id of ['#tEvery', '#tWinFrom', '#tWinTo', '#tDue', '#tTime', '#tPlanDate', '#tPlanStart', '#tPlanEnd', '#tEvent']) $(id).addEventListener('change', update);
 }

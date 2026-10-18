@@ -955,6 +955,56 @@ details.task-group[open] > summary::after { transform: rotate(90deg); }
 .time-pair input { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); }
 .task-bell { color: var(--accent); }
 
+/* ---------- «Когда делаю» и @событие ---------- */
+.tg-plan {
+  border: 1.5px dashed var(--c);
+  border-left-width: 3px;
+  border-left-style: solid;
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--c) 14%, var(--surface)) 0 8px, color-mix(in srgb, var(--c) 8%, var(--surface)) 8px 16px);
+}
+.tg-plan .tg-ev-title { display: flex; align-items: center; gap: 6px; }
+.tg-plan .task-check { width: 14px; height: 14px; border-radius: 4px; border-width: 1.5px; }
+.tg-plan .task-check.is-done::after { left: 3px; top: 0; width: 3.5px; height: 7px; }
+.tg-plan-hint { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tg-plan.is-done { opacity: .55; }
+.chip.is-plan { border-style: dashed; background: color-mix(in srgb, var(--c) 10%, transparent); }
+.task-plan { color: var(--text); }
+.plan-row { display: flex; align-items: center; gap: 6px; }
+.plan-row input { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); }
+.plan-row input[type="date"] { flex: 1.4; }
+
+.quick { position: relative; }
+.mention-list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.mention-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px 9px 12px;
+  border: 0;
+  border-left: 3px solid var(--c);
+  border-radius: 8px;
+  background: none;
+  text-align: left;
+}
+.mention-item:hover, .mention-item.is-active { background: var(--surface-2); }
+.mention-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-item small { color: var(--muted); white-space: nowrap; }
+.mention-empty { padding: 10px 12px; color: var(--muted); }
+
 /* ---------- Синхронизация ---------- */
 .sync-btn { font-size: 17px; color: var(--muted); }
 .sync-btn[data-status="ok"] { color: #30a46c; }
@@ -1036,6 +1086,10 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: va
   }
   .quick-preview:empty { display: none; }
   .toasts { bottom: calc(76px + env(safe-area-inset-bottom)); }
+  /* Строка ввода внизу — подсказка событий открывается над ней */
+  .mention-list { top: auto; bottom: calc(100% + 6px); }
+  .plan-row { flex-wrap: wrap; }
+  .plan-row input[type="date"] { flex: 1 1 100%; }
   /* Плашка напоминания на телефоне — над строкой ввода, на всю ширину */
   .alarm-bar { top: auto; right: 12px; left: 12px; width: auto; bottom: calc(76px + env(safe-area-inset-bottom)); }
   .cal-bar { display: flex; gap: 6px; overflow-x: auto; margin: 0 12px 10px; scrollbar-width: none; }

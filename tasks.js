@@ -8,7 +8,7 @@
 /* global HOUR_H, state, h, $, readJSON, writeJSON, uid, calOf, colorOf, defaultCal, findEvent, render, toast, withUndo,
    relativeDay, formatDate, capitalize, makeDraggable, openNav, closeNav, editing, CALS_KEY, saveEvents,
    toKey, fromKey, today, addDays, startOfWeek, toMin, fromMin, collect, taskDeadline, normalizeTask, WD_SHORT,
-   fillTaskReminder, buildTaskReminder, describeReminder, userTz, localParts */
+   fillTaskReminder, buildTaskReminder, describeReminder, userTz, localParts, normalizePlan, makeDraggable, relativeDay */
 
 const TASKS_KEY = 'everyday-calendar:tasks';
 
@@ -180,9 +180,10 @@ function deadlineMarker(task) {
 }
 
 /** Строка задачи в боковой панели, панели дня и списке. */
-function taskLine(task, { showDate = false } = {}) {
+function taskLine(task, { showDate = false, asPlan = false } = {}) {
   const dl = deadlineOf(task);
   const meta = [];
+  if (asPlan && task.plan?.start) meta.push(`🕒 ${task.plan.start}–${fromMin(planEndMin(task.plan)).replace('23:59', '24:00')}`);
   if (showDate && dl) meta.push(isOverdue(task) ? overdueLabel(dl) : deadlineLabel(dl));
   else if (dl?.time) meta.push(`до ${dl.time}`);
   const ev = task.eventId && findEvent(task.eventId);
@@ -192,6 +193,149 @@ function taskLine(task, { showDate = false } = {}) {
     h('button', { class: 'task-line-main', type: 'button', onclick: () => { openTaskEditor(task); closeNav(); } },
       h('span', { class: 'task-line-title' }, task.title),
       meta.length ? h('small', {}, meta.join(' · ')) : null));
+}
+
+/* ---------- «Когда делаю» ---------- */
+
+const planEndMin = (p) => (p.end ? toMin(p.end) : Math.min(toMin(p.start) + 60, 1440));
+
+/** «чт, 22 окт, 19:00–23:00» / «Сегодня, 19:00–23:00» / «завтра» (без времени). */
+function planLabel(p) {
+  const d = fromKey(p.date);
+  const day = relativeDay(d) || `${WD_SHORT[(d.getDay() + 6) % 7]}, ${d.getDate()} ${['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'][d.getMonth()]}`;
+  if (!p.start) return day;
+  return `${day}, ${p.start}–${fromMin(planEndMin(p)).replace('23:59', '24:00')}`;
+}
+
+/** Видимые задачи по дню блока «Когда делаю»: Map<'YYYY-MM-DD', [task]>. */
+function plansByDay(from, to) {
+  const map = new Map();
+  const a = toKey(from);
+  const b = toKey(to);
+  for (const t of visibleTasks()) {
+    if (!t.plan || t.plan.date < a || t.plan.date > b) continue;
+    if (!map.has(t.plan.date)) map.set(t.plan.date, []);
+    map.get(t.plan.date).push(t);
+  }
+  for (const list of map.values()) list.sort((x, y) => (x.plan.start || '').localeCompare(y.plan.start || '') || compareTasks(x, y));
+  return map;
+}
+
+/** К чему готовимся: «к «Защита проекта», сб 10:00» или «срок: пт, 23 окт». */
+function deadlineHint(task) {
+  const dl = deadlineOf(task);
+  if (!dl) return null;
+  const ev = task.eventId && findEvent(task.eventId);
+  return ev ? `к «${ev.title}», ${deadlineLabel(dl)}` : `срок: ${deadlineLabel(dl)}`;
+}
+
+/** Блок работы на сетке времени. it — { task, s, e, col, cols } после раскладки по колонкам. */
+function planBlock(it) {
+  const { task, s, e, col, cols } = it;
+  const hint = deadlineHint(task);
+  const el = h('div', {
+    class: taskClasses(task, `tg-ev tg-plan${e - s < 45 ? ' is-short' : ''}`),
+    role: 'button',
+    tabindex: '0',
+    style: {
+      '--c': colorOf(task),
+      top: `${(s / 60) * HOUR_H}px`,
+      height: `${Math.max(((e - s) / 60) * HOUR_H - 2, 18)}px`,
+      left: `calc(${(col / cols) * 100}% + 2px)`,
+      width: `calc(${100 / cols}% - 4px)`,
+    },
+    title: `🕒 ${task.title}\n${planLabel(task.plan)}${hint ? `\n${hint}` : ''}`,
+    onclick: () => openTaskEditor(task),
+    onkeydown: (k) => { if (k.key === 'Enter') openTaskEditor(task); },
+  },
+  h('div', { class: 'tg-ev-title' }, taskCheck(task), ' ', task.title),
+  h('div', { class: 'tg-ev-time' }, `${task.plan.start}–${fromMin(planEndMin(task.plan)).replace('23:59', '24:00')}`),
+  hint ? h('div', { class: 'tg-plan-hint' }, `📅 ${hint}`) : null);
+  makeDraggable(el, { id: task.id, repeat: 'none', start: task.plan.start, kind: 'plan' });
+  return el;
+}
+
+/** Блок работы в клетке месяца и в строке «весь день». */
+function planChip(task) {
+  const el = h('div', {
+    class: taskClasses(task, 'chip is-task is-plan'),
+    role: 'button',
+    tabindex: '0',
+    style: { '--c': colorOf(task) },
+    title: `🕒 ${task.title}\n${planLabel(task.plan)}${deadlineHint(task) ? `\n${deadlineHint(task)}` : ''}`,
+    onclick: (e) => { e.stopPropagation(); openTaskEditor(task); },
+    onkeydown: (e) => { if (e.key === 'Enter') { e.stopPropagation(); openTaskEditor(task); } },
+  },
+  taskCheck(task),
+  task.plan.start ? h('span', { class: 'chip-time' }, task.plan.start) : null,
+  h('span', { class: 'chip-title' }, task.title));
+  makeDraggable(el, { id: task.id, repeat: 'none', start: null, kind: 'plan' });
+  return el;
+}
+
+/** Перенос блока работы на другой день (и время, если бросили на сетку). */
+function movePlan(id, key, startMin = null) {
+  const t = findTask(id);
+  if (!t?.plan) return;
+  withUndo(`Перенесено: ${planLabel({ ...t.plan, date: key })}`, () => {
+    if (startMin != null && t.plan.start) {
+      const dur = planEndMin(t.plan) - toMin(t.plan.start);
+      t.plan = normalizePlan({ date: key, start: fromMin(startMin), end: fromMin(Math.min(startMin + dur, 1439)) });
+    } else {
+      t.plan = { ...t.plan, date: key };
+    }
+  });
+}
+
+/** Задачи событий хранят копию срока; событие перенесли — обновляем её (нужна серверу для напоминаний). */
+function syncLinkedTaskDeadlines() {
+  let changed = false;
+  for (const t of state.tasks) {
+    const ev = t.eventId && findEvent(t.eventId);
+    if (!ev) continue;
+    const dl = taskDeadline(t, ev);
+    if (t.due !== dl.date || t.time !== dl.time) {
+      t.due = dl.date;
+      t.time = dl.time;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/* ---------- @событие ---------- */
+
+const normText = (t) => t.toLowerCase().replace(/ё/g, 'е');
+
+/** Ближайшие вхождения событий, начинающиеся не раньше after: [{ ev, key, start }]. */
+function upcomingOccurrences(after = Date.now()) {
+  const t = today();
+  const out = [];
+  for (const [key, list] of collect(state.events, addDays(t, -1), addDays(t, 120))) {
+    for (const o of list) {
+      if (o.index > 0) continue;
+      const d = fromKey(key);
+      const start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, o.ev.start ? toMin(o.ev.start) : 0).getTime();
+      if (start >= after) out.push({ ev: o.ev, key, start });
+    }
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+
+/** «защита», «теория_фин» — каждое слово метки должно быть началом какого-то слова в названии. */
+function matchesMention(title, mention) {
+  const words = normText(title).split(/[^a-zа-я0-9]+/).filter(Boolean);
+  const parts = normText(mention).split(/[_.\-]+/).filter(Boolean);
+  return parts.length > 0 && parts.every((p) => words.some((w) => w.startsWith(p)));
+}
+
+function mentionTargets(mention, after = Date.now()) {
+  return upcomingOccurrences(after).filter((o) => matchesMention(o.ev.title, mention));
+}
+
+/** Короткая метка для подстановки после «@»: первые слова названия через «_». */
+function mentionSlug(title) {
+  return normText(title).split(/[^a-zа-я0-9]+/).filter(Boolean).slice(0, 2).join('_');
 }
 
 function makeTaskDraggable(el, task) {
@@ -279,6 +423,7 @@ function taskRow(task, group) {
   const dl = deadlineOf(task);
   const ev = task.eventId && findEvent(task.eventId);
   const meta = [];
+  if (task.plan && !task.done) meta.push(h('span', { class: 'task-plan' }, `🕒 ${planLabel(task.plan)}`));
   if (dl) {
     if (group === 'overdue') meta.push(h('span', { class: 'task-overdue' }, `${overdueLabel(dl)} · ${deadlineLabel(dl)}`));
     else if (group === 'today') meta.push(dl.time ? `до ${dl.time}` : 'в течение дня');
@@ -366,9 +511,13 @@ function openTaskEditor(task = null, preset = {}) {
     eventId: preset.eventId || null,
     eventKey: preset.eventKey || null,
     reminder: preset.reminder || null,
+    plan: preset.plan || null,
     notes: '',
   };
   $('#tTitle').value = v.title;
+  $('#tPlanDate').value = v.plan?.date || '';
+  $('#tPlanStart').value = v.plan?.start || '';
+  $('#tPlanEnd').value = v.plan?.end || '';
   $('#tDue').value = v.due || '';
   $('#tTime').value = v.time || '';
   $('#tPriority').checked = Boolean(v.priority);
@@ -385,16 +534,30 @@ function openTaskEditor(task = null, preset = {}) {
   $('#tTitle').focus();
 }
 
+/** «Когда делаю» из полей окна задачи (время без дня — сегодня). */
+function editorPlan() {
+  const date = $('#tPlanDate').value || ($('#tPlanStart').value ? toKey(today()) : '');
+  return normalizePlan({ date, start: $('#tPlanStart').value || null, end: $('#tPlanEnd').value || null });
+}
+
 /** Срок и правило напоминаний — такими, как они сейчас в полях окна задачи. */
 function taskEditorDraft() {
   const [eventId, eventKey] = $('#tEvent').value.split('|');
   const due = eventId ? null : ($('#tDue').value || ($('#tTime').value ? toKey(today()) : null));
   const time = eventId ? null : ($('#tTime').value || null);
   const dl = eventId ? deadlineOf({ eventId, eventKey: eventKey || null }) : (due ? { date: due, time } : null);
-  return { due: dl?.date || null, time: dl?.time || null, eventId: eventId || null, reminder: buildTaskReminder(dl) };
+  return { due: dl?.date || null, time: dl?.time || null, eventId: eventId || null, plan: editorPlan(), reminder: buildTaskReminder(dl) };
 }
 
 function initTasks() {
+  $('#tPlanClear').addEventListener('click', () => {
+    for (const id of ['#tPlanDate', '#tPlanStart', '#tPlanEnd']) $(id).value = '';
+    $('#tPlanDate').dispatchEvent(new Event('change'));
+  });
+  // Указали начало — конец по умолчанию через час
+  $('#tPlanStart').addEventListener('change', () => {
+    if ($('#tPlanStart').value && !$('#tPlanEnd').value) $('#tPlanEnd').value = fromMin(Math.min(toMin($('#tPlanStart').value) + 60, 1439));
+  });
   $('#tEvent').addEventListener('change', () => {
     syncTaskLink();
     const ev = findEvent($('#tEvent').value.split('|')[0]);
@@ -413,6 +576,7 @@ function initTasks() {
       eventId: eventId || null,
       eventKey: eventKey || null,
       reminder: taskEditorDraft().reminder,
+      plan: editorPlan(),
       notes: $('#tNotes').value.trim(),
     };
     if (data.time && !data.due) data.due = toKey(today());

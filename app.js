@@ -8,7 +8,9 @@
    taskBadgeCount, openTaskEditor, initTasks, renderEvTasks, commitPendingTasks, compareTasks,
    syncSoon, initSync, openSyncDialog, renderSyncStatus,
    refreshAlarms, runLocalAlarms, enableReminders, notifyStatusText, quietLabel, initReminders, initTaskReminderFields,
-   setEditorReminds, editorReminds, reminderFromParse, describeReminder, userTz, quietHours, iso */
+   setEditorReminds, editorReminds, reminderFromParse, describeReminder, userTz, quietHours, iso,
+   plansByDay, planBlock, planChip, movePlan, planLabel, syncLinkedTaskDeadlines, mentionTargets, mentionSlug, normalizePlan, deadlineHint,
+   upcomingOccurrences */
 
 const STORE_KEY = 'everyday-calendar:events';
 const SETTINGS_KEY = 'everyday-calendar:settings';
@@ -36,7 +38,11 @@ function readJSON(key, fallback) {
 function writeJSON(key, value) {
   try {
     // Перед записью событий и задач пересчитываем, когда напомнить в следующий раз
-    if (key === STORE_KEY) refreshAlarms('event', value);
+    if (key === STORE_KEY) {
+      refreshAlarms('event', value);
+      // Событие перенесли — у его задач сдвигается срок (копия нужна серверу напоминаний)
+      if (syncLinkedTaskDeadlines()) writeJSON(TASKS_KEY, state.tasks);
+    }
     if (key === TASKS_KEY) refreshAlarms('task', value);
     localStorage.setItem(key, JSON.stringify(value));
     if (key === STORE_KEY || key === TASKS_KEY || key === CALS_KEY) syncSoon();
@@ -323,6 +329,12 @@ function selectDay(d, view) {
   else render();
 }
 
+/** Задачи дня: блоки «Когда делаю» и сроки (задача с блоком в этот же день показывается один раз). */
+function dayTaskItems(key, plans, deadlines) {
+  const planned = plans.get(key) || [];
+  return { planned, due: (deadlines.get(key) || []).filter((t) => !planned.includes(t)) };
+}
+
 /* ---------- Месяц ---------- */
 
 function renderMonth() {
@@ -333,6 +345,7 @@ function renderMonth() {
   const end = addDays(start, weeks * 7 - 1);
   const map = collect(visibleEvents(), start, end);
   const tasks = tasksByDay(start, end, { standalone: true });
+  const plans = plansByDay(start, end);
   const t = today();
   const lanesByDay = new Map();
   for (let w = 0; w < weeks; w++) {
@@ -371,15 +384,17 @@ function renderMonth() {
     // Сначала дорожки многодневных событий (пустые — распорки, чтобы полосы шли ровно), потом остальное
     const slots = lanesByDay.get(key);
     const lastLane = slots.findLastIndex(Boolean);
+    const { planned, due } = dayTaskItems(key, plans, tasks);
     const items = [
       ...slots.slice(0, lastLane + 1).map((s) => (s ? () => spanChip(s) : () => h('div', { class: 'chip-spacer' }))),
       ...list.filter((o) => o.len === 1).map((o) => () => chip(o)),
-      ...(tasks.get(key) || []).map((task) => () => taskChip(task)),
+      ...planned.map((task) => () => planChip(task)),
+      ...due.map((task) => () => taskChip(task)),
     ];
     const limit = 3;
     const shown = items.length > limit + 1 ? items.slice(0, limit) : items;
     for (const make of shown) cell.append(make());
-    const hidden = list.length + (tasks.get(key) || []).length - cell.querySelectorAll('.chip').length;
+    const hidden = list.length + planned.length + due.length - cell.querySelectorAll('.chip').length;
     if (hidden > 0) {
       cell.append(h('button', {
         class: 'more',
@@ -397,7 +412,8 @@ function renderMonth() {
 function renderDayPanel(d) {
   const key = toKey(d);
   const list = collect(visibleEvents(), d, d).get(key);
-  const tasks = tasksByDay(d, d).get(key) || [];
+  const { planned, due } = dayTaskItems(key, plansByDay(d, d), tasksByDay(d, d));
+  const tasks = [...planned, ...due];
   return h('div', { class: 'day-panel' },
     h('div', { class: 'day-panel-head' },
       h('strong', {}, capitalize(relativeDay(d) || WD_FULL[wdIndex(d)]), `, ${formatDate(d, { weekday: false })}`),
@@ -410,7 +426,8 @@ function renderDayPanel(d) {
         onclick: () => openEditor({ ev: o.ev, key: o.key }),
       }, h('span', {}, o.ev.title, progressBadge(o.ev, o.key), h('small', {}, formatTime(o.ev, o.key)))))
       : null,
-    tasks.map((task) => taskLine(task)),
+    planned.map((task) => taskLine(task, { asPlan: true })),
+    due.map((task) => taskLine(task)),
     list.length || tasks.length ? null : h('div', { class: 'side-empty' }, 'Свободный день'));
 }
 
@@ -486,6 +503,7 @@ function chip({ ev, key }) {
 function renderTimeGrid(days) {
   const map = collect(visibleEvents(), days[0], days[days.length - 1]);
   const tasks = tasksByDay(days[0], days[days.length - 1], { standalone: true });
+  const plans = plansByDay(days[0], days[days.length - 1]);
   const t = today();
 
   const head = h('div', { class: 'tg-row tg-head' }, h('div'),
@@ -505,6 +523,7 @@ function renderTimeGrid(days) {
       });
       for (const s of lanes[i]) cell.append(s ? spanChip(s) : h('div', { class: 'chip-spacer' }));
       for (const o of map.get(key)) if (!o.ev.start && o.len === 1) cell.append(chip(o));
+      for (const task of plans.get(key) || []) if (!task.plan.start) cell.append(planChip(task));
       for (const task of tasks.get(key) || []) if (!deadlineOf(task).time) cell.append(taskChip(task));
       dropTarget(cell, key, 'allday');
       return cell;
@@ -514,13 +533,14 @@ function renderTimeGrid(days) {
   for (let i = 1; i < 24; i++) hours.append(h('span', { style: { top: `${i * HOUR_H}px` } }, `${pad(i)}:00`));
   const body = h('div', { class: 'tg-body', style: { height: `${24 * HOUR_H}px` } }, hours,
     days.map((d) => dayColumn(d, map.get(toKey(d)).filter((o) => o.ev.start && o.len === 1), sameDay(d, t),
-      (tasks.get(toKey(d)) || []).filter((task) => deadlineOf(task).time))));
+      (tasks.get(toKey(d)) || []).filter((task) => deadlineOf(task).time),
+      (plans.get(toKey(d)) || []).filter((task) => task.plan.start))));
 
   return h('div', { class: 'tg', style: { '--cols': days.length, '--hour': `${HOUR_H}px` } },
     head, allDay, h('div', { class: 'tg-scroll' }, body));
 }
 
-function dayColumn(d, items, isToday, timedTasks) {
+function dayColumn(d, items, isToday, timedTasks, timedPlans = []) {
   const key = toKey(d);
   const col = h('div', { class: `tg-col${isToday ? ' is-today' : ''}${wdIndex(d) >= 5 ? ' is-weekend' : ''}`, dataset: { date: key } });
   col.addEventListener('click', (e) => {
@@ -530,8 +550,12 @@ function dayColumn(d, items, isToday, timedTasks) {
   });
   dropTarget(col, key, col);
 
-  const laid = layoutDay(items.map((o) => ({ ...o, s: toMin(o.ev.start), e: endMinutes(o.ev) })));
-  for (const it of laid) col.append(eventBlock(it));
+  // События и блоки «Когда делаю» раскладываются вместе, чтобы не перекрывать друг друга
+  const laid = layoutDay([
+    ...items.map((o) => ({ ...o, s: toMin(o.ev.start), e: endMinutes(o.ev) })),
+    ...timedPlans.map((task) => ({ task, s: toMin(task.plan.start), e: task.plan.end ? toMin(task.plan.end) : Math.min(toMin(task.plan.start) + 60, 1440) })),
+  ]);
+  for (const it of laid) col.append(it.task ? planBlock(it) : eventBlock(it));
   for (const task of timedTasks) col.append(deadlineMarker(task));
   if (isToday) col.append(h('div', { class: 'now-line', style: { top: `${nowTop()}px` } }));
   return col;
@@ -669,6 +693,15 @@ function dropTarget(el, key, mode) {
       moveTask(drag.id, key);
       return;
     }
+    if (drag.kind === 'plan') {
+      let startMin = null;
+      if (mode instanceof Element) {
+        const r = mode.getBoundingClientRect();
+        startMin = Math.max(0, Math.min(1440 - 15, snap(((e.clientY - r.top) / HOUR_H) * 60 - drag.grabMin, 15)));
+      }
+      movePlan(drag.id, key, startMin);
+      return;
+    }
     const ev = findEvent(drag.id);
     if (!ev) return;
     const { grabMin, dayIndex } = drag;
@@ -702,12 +735,13 @@ function renderAgenda() {
   const to = addDays(from, 59);
   const map = collect(visibleEvents(), from, to);
   const tasks = tasksByDay(from, to, { standalone: true });
+  const plans = plansByDay(from, to);
   const t = today();
   const wrap = h('div', { class: 'agenda' });
 
   for (const [key, list] of map) {
-    const dayTasks = tasks.get(key) || [];
-    if (!list.length && !dayTasks.length) continue;
+    const { planned, due: dayTasks } = dayTaskItems(key, plans, tasks);
+    if (!list.length && !dayTasks.length && !planned.length) continue;
     const d = fromKey(key);
     const rel = relativeDay(d);
     wrap.append(h('div', { class: `agenda-day${sameDay(d, t) ? ' is-today' : ''}` },
@@ -727,6 +761,7 @@ function renderAgenda() {
         h('span', { class: 'agenda-title' }, ev.title, ' ', progressBadge(ev, o.key),
           extra.some(Boolean) ? h('small', {}, extra.filter(Boolean).join(' · ')) : null));
       }),
+      planned.map((task) => taskLine(task, { asPlan: true })),
       dayTasks.map((task) => taskLine(task)))));
   }
 
@@ -748,6 +783,7 @@ function renderMini() {
   const end = addDays(start, 41);
   const map = collect(visibleEvents(), start, end);
   const tasks = tasksByDay(start, end);
+  const plans = plansByDay(start, end);
   const t = today();
 
   const grid = h('div', { class: 'mini-grid' }, WD_SHORT.map((w) => h('div', { class: 'mini-wd' }, w)));
@@ -757,7 +793,7 @@ function renderMini() {
     if (day.getMonth() !== m.getMonth()) cls.push('is-other');
     if (sameDay(day, t)) cls.push('is-today');
     if (sameDay(day, state.cursor)) cls.push('is-selected');
-    if (map.get(toKey(day)).length || tasks.has(toKey(day))) cls.push('has-events');
+    if (map.get(toKey(day)).length || tasks.has(toKey(day)) || plans.has(toKey(day))) cls.push('has-events');
     grid.append(h('button', {
       class: cls.join(' '),
       type: 'button',
@@ -813,9 +849,11 @@ function renderSideList() {
   const t = today();
   const map = collect(visibleEvents(), t, addDays(t, 1));
   const tasks = tasksByDay(t, addDays(t, 1));
+  const plans = plansByDay(t, addDays(t, 1));
   const section = (label, key) => {
     const list = map.get(key);
-    const dayTasks = (tasks.get(key) || []).filter((task) => !isOverdue(task));
+    const { planned, due } = dayTaskItems(key, plans, tasks);
+    const dayTasks = due.filter((task) => !isOverdue(task));
     return [
       h('h3', {}, label),
       list.map((o) => h('button', {
@@ -825,8 +863,9 @@ function renderSideList() {
         onclick: () => { openEditor({ ev: o.ev, key: o.key }); closeNav(); },
       }, h('span', {}, o.ev.title, progressBadge(o.ev, o.key),
         h('small', {}, o.len > 1 ? `${spanDayLabel(o)} · ${formatTime(o.ev, o.key)}` : formatTime(o.ev))))),
+      planned.map((task) => taskLine(task, { asPlan: true })),
       dayTasks.map((task) => taskLine(task)),
-      list.length || dayTasks.length ? null : h('div', { class: 'side-empty' }, 'Ничего не запланировано'),
+      list.length || dayTasks.length || planned.length ? null : h('div', { class: 'side-empty' }, 'Ничего не запланировано'),
     ];
   };
   const overdue = visibleTasks().filter(isOverdue).sort(compareTasks);
@@ -1128,8 +1167,14 @@ const quickInput = $('#quickInput');
 const TASK_PREFIX = /^\s*(?:задача|todo|\[\s?\])\s*[:\-–]?\s*/i;
 /** Фраза про повторяющиеся или многократные напоминания — это задача: её надо отметить «сделано». */
 const remindsLikeTask = (r) => Boolean(r.every || r.times || r.count || r.inMinutes || r.nag);
-const quickIsTask = (r = null) => state.quickMode === 'task' || TASK_PREFIX.test(quickInput.value)
-  || remindsLikeTask(r || parseQuick(quickInput.value, today()));
+const quickIsTask = (r = null) => {
+  if (state.quickMode === 'task' || TASK_PREFIX.test(quickInput.value)) return true;
+  const p = r || parseQuick(quickInput.value, today());
+  return remindsLikeTask(p) || Boolean(p.mention); // «@защита» — задача к событию
+};
+
+/** Выбранные из подсказки события: метка после @ → { id, key }. */
+const quickPicks = new Map();
 
 function renderQuickMode() {
   const task = quickIsTask();
@@ -1146,7 +1191,37 @@ function quickParse() {
   if (!r.date) r.date = r.repeat === 'none' || state.cursor >= today() ? state.cursor : today();
   if (r.spanDays) r.endDate = addDays(r.date, r.spanDays - 1);
   if (r.endDate && r.endDate <= r.date) r.endDate = null;
+  r.link = r.mention ? resolveMention(r) : null;
   return r;
+}
+
+/**
+ * Событие для «@метки»: выбранное в подсказке или ближайшее подходящее по названию.
+ * Для повторяющейся пары берём первое занятие после «Когда делаю» — к нему и готовимся.
+ */
+function resolveMention(r) {
+  const pick = quickPicks.get(r.mention.toLowerCase());
+  if (pick) {
+    const ev = findEvent(pick.id);
+    if (ev) return { ev, key: pick.key };
+  }
+  const d = r.date;
+  const after = r.hasDate || r.start
+    ? new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, r.start ? toMin(r.range ? r.end : r.start) : 0).getTime()
+    : Date.now();
+  const [first] = mentionTargets(r.mention, Math.max(after, Date.now()));
+  return first ? { ev: first.ev, key: first.key } : null;
+}
+
+/** «Когда делаю» и срок задачи из фразы. С @ или промежутком «с 19 до 23» дата и время — это блок работы. */
+function quickTaskParts(r) {
+  const plan = (r.link || r.range) && (r.hasDate || r.start)
+    ? normalizePlan({ date: toKey(r.hasDate ? r.date : today()), start: r.start, end: r.range ? r.end : null })
+    : null;
+  let deadline = null;
+  if (r.link) deadline = { date: r.link.key, time: r.link.ev.start || null };
+  else if (!plan) deadline = quickTaskDeadline(r);
+  return { plan, deadline };
 }
 
 /** «сб, 24 окт – вс, 25 окт» для многодневного, иначе «Завтра» / «пт, 23 октября». */
@@ -1159,12 +1234,17 @@ function updateQuickPreview() {
   const preview = $('#quickPreview');
   if (!quickInput.value.trim()) { preview.textContent = ''; return; }
   const r = quickParse();
-  const cal = r.cal || state.calendars.find((c) => c.id === defaultCal());
+  // Задача к событию без #метки попадает в календарь самого события
+  const cal = r.cal || (r.link ? calOf(r.link.ev) : state.calendars.find((c) => c.id === defaultCal()));
   let parts;
   const isTask = quickIsTask(r);
   if (isTask) {
-    const dl = quickTaskDeadline(r);
-    parts = [dl ? `срок ${deadlineLabel(dl)}` : 'без срока'];
+    const { plan, deadline: dl } = quickTaskParts(r);
+    parts = [];
+    if (plan) parts.push(`🕒 ${planLabel(plan)}`);
+    if (r.mention && !r.link) parts.push(`@${r.mention}: событие не найдено`);
+    else if (r.link) parts.push(`📅 к «${r.link.ev.title}», ${deadlineLabel(dl)}`);
+    else parts.push(dl ? `срок ${deadlineLabel(dl)}` : (plan ? '' : 'без срока'));
     if (r.priority) parts.push('важная');
     const rule = quickTaskReminder(r, dl);
     if (rule) parts.push(`🔔 ${describeReminder(rule, Date.now(), userTz())}`);
@@ -1174,7 +1254,7 @@ function updateQuickPreview() {
     if (r.before) parts.push(`🔔 за ${r.before.map(remindLabel).join(' и за ')}`);
   }
   preview.replaceChildren(
-    `${isTask ? '☑ ' : ''}${r.title || 'Без названия'} · ${parts.join(', ')} · `,
+    `${isTask ? '☑ ' : ''}${r.title || 'Без названия'} · ${parts.filter(Boolean).join(', ')} · `,
     h('span', { class: 'quick-cal', style: { '--c': cal.color } }, r.tag && !r.cal ? `#${r.tag}?` : cal.name),
   );
 }
@@ -1211,7 +1291,74 @@ function toggleQuickMode() {
 
 $('#quickMode').addEventListener('click', () => { toggleQuickMode(); quickInput.focus(); });
 
-quickInput.addEventListener('input', () => { renderQuickMode(); updateQuickPreview(); });
+/* ---------- Подсказка событий для «@» ---------- */
+
+const mentionList = $('#mentionList');
+let mentionItems = [];
+
+/** «@защ» прямо перед курсором — что ищем и где это в тексте. */
+function mentionAtCaret() {
+  const pos = quickInput.selectionStart ?? quickInput.value.length;
+  const m = quickInput.value.slice(0, pos).match(/(^|\s)@([^\s@#]*)$/);
+  return m ? { query: m[2], from: pos - m[2].length - 1, to: pos } : null;
+}
+
+function renderMentionList() {
+  const at = mentionAtCaret();
+  mentionItems = at ? (at.query ? mentionTargets(at.query) : upcomingForMention()).slice(0, 6) : [];
+  if (!at || !mentionItems.length) {
+    mentionList.hidden = !at;
+    mentionList.replaceChildren(...(at ? [h('div', { class: 'mention-empty' }, at.query ? `Нет событий с «${at.query}» в ближайшие 4 месяца` : 'Начните писать название события')] : []));
+    return;
+  }
+  mentionList.replaceChildren(...mentionItems.map((o, i) => h('button', {
+    class: `mention-item${i === 0 ? ' is-active' : ''}`,
+    type: 'button',
+    role: 'option',
+    style: { '--c': colorOf(o.ev) },
+    // mousedown, чтобы строка не теряла фокус до выбора
+    onmousedown: (e) => { e.preventDefault(); pickMention(o); },
+  }, h('span', { class: 'mention-title' }, o.ev.title),
+  h('small', {}, `${capitalize(formatDate(fromKey(o.key)))}${o.ev.start ? `, ${o.ev.start}` : ''}`))));
+  mentionList.hidden = false;
+}
+
+/** Без текста после @ — ближайшие события по времени. */
+function upcomingForMention() {
+  const seen = new Set();
+  return upcomingOccurrences().filter((o) => !seen.has(o.ev.id) && seen.add(o.ev.id));
+}
+
+function pickMention(o) {
+  const at = mentionAtCaret();
+  if (!at) return;
+  const slug = mentionSlug(o.ev.title) || 'событие';
+  quickPicks.set(slug, { id: o.ev.id, key: o.key });
+  const before = quickInput.value.slice(0, at.from);
+  const after = quickInput.value.slice(at.to).replace(/^[^\s]*/, '');
+  quickInput.value = `${before}@${slug} ${after.trimStart()}`;
+  const caret = before.length + slug.length + 2;
+  quickInput.setSelectionRange(caret, caret);
+  mentionList.hidden = true;
+  renderQuickMode();
+  updateQuickPreview();
+  quickInput.focus();
+}
+
+quickInput.addEventListener('input', () => { renderQuickMode(); updateQuickPreview(); renderMentionList(); });
+quickInput.addEventListener('blur', () => setTimeout(() => { mentionList.hidden = true; }, 150));
+quickInput.addEventListener('keydown', (e) => {
+  // Enter при открытой подсказке выбирает первое событие
+  if (e.key === 'Enter' && !e.shiftKey && !mentionList.hidden && mentionItems.length) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    pickMention(mentionItems[0]);
+  }
+  if (e.key === 'Escape' && !mentionList.hidden) {
+    e.stopImmediatePropagation();
+    mentionList.hidden = true;
+  }
+});
 quickInput.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { quickInput.value = ''; updateQuickPreview(); quickInput.blur(); }
   if (e.key === 'Tab' && !quickInput.value) { e.preventDefault(); toggleQuickMode(); }
@@ -1219,8 +1366,12 @@ quickInput.addEventListener('keydown', (e) => {
     e.preventDefault();
     const r = quickParse();
     if (quickIsTask(r)) {
-      const dl = quickTaskDeadline(r);
-      openTaskEditor(null, { title: r.title, due: dl?.date, time: dl?.time, priority: r.priority, cal: r.cal?.id, reminder: quickTaskReminder(r, dl) });
+      const { plan, deadline: dl } = quickTaskParts(r);
+      openTaskEditor(null, {
+        title: r.title, due: dl?.date, time: dl?.time, priority: r.priority, cal: r.cal?.id || (r.link ? calOf(r.link.ev).id : undefined),
+        reminder: quickTaskReminder(r, dl), plan,
+        eventId: r.link?.ev.id, eventKey: r.link && r.link.ev.repeat !== 'none' ? r.link.key : null,
+      });
     } else openEditor({ preset: { title: r.title, date: toKey(r.date), start: r.start, end: r.end, repeat: r.repeat, allDay: !r.start, cal: r.cal?.id, endDate: r.endDate ? toKey(r.endDate) : null, reminds: r.before || undefined } });
     quickInput.value = '';
     updateQuickPreview();
@@ -1266,24 +1417,32 @@ $('#quickForm').addEventListener('submit', (e) => {
 });
 
 function addQuickTask(r) {
-  const dl = quickTaskDeadline(r);
+  if (r.mention && !r.link) {
+    toast(`Не нашёл событие «@${r.mention}». Начните писать название после @ и выберите из списка`, { duration: 7000 });
+    return;
+  }
+  const { plan, deadline: dl } = quickTaskParts(r);
   const task = {
     id: uid(),
     title: r.title || 'Без названия',
     due: dl?.date || null,
     time: dl?.time || null,
-    cal: r.cal ? r.cal.id : defaultCal(),
+    // Без #метки задача к событию попадает в календарь самого события
+    cal: r.cal ? r.cal.id : (r.link ? calOf(r.link.ev).id : defaultCal()),
     priority: r.priority,
     done: false,
     doneAt: null,
-    eventId: null,
-    eventKey: null,
+    eventId: r.link ? r.link.ev.id : null,
+    eventKey: r.link && r.link.ev.repeat !== 'none' ? r.link.key : null,
+    plan,
     reminder: quickTaskReminder(r, dl),
     notes: '',
   };
   const cal = calOf(task);
   const bell = task.reminder ? ` · 🔔 ${describeReminder(task.reminder, Date.now(), userTz())}` : '';
-  withUndo(`Задача в «${cal.name}»: ${task.title}${dl ? ` · срок ${deadlineLabel(dl)}` : ''}${bell}`, () => {
+  const what = [plan ? `🕒 ${planLabel(plan)}` : '', r.link ? `к «${r.link.ev.title}»` : (dl ? `срок ${deadlineLabel(dl)}` : '')].filter(Boolean).join(' · ');
+  quickPicks.clear();
+  withUndo(`Задача в «${cal.name}»: ${task.title}${what ? ` · ${what}` : ''}${bell}`, () => {
     state.tasks.push(task);
     cal.visible = true;
   });

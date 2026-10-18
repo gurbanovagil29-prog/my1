@@ -167,6 +167,8 @@ function parseQuick(input, base = today()) {
     // inMinutes — «через 30 минут», before — «за час и за 10 минут» (для событий),
     // nag — «пока не сделаю», remindWord — во фразе есть «напомни»
     every: null, window: null, times: null, count: 0, inMinutes: 0, before: null, nag: false, remindWord: false,
+    // mention — «@защита»: к какому событию привязать задачу; range — время задано промежутком «с 19 до 23»
+    mention: null, range: false,
   };
   let s = ` ${String(input).replace(/\s+/g, ' ').trim()} `;
   const PERIOD = '(?: (утра|дня|вечера|ночи))?';
@@ -199,8 +201,9 @@ function parseQuick(input, base = today()) {
     return true;
   };
 
-  // Метка категории: «#работа»
-  take('#([^\\s#,.!?;]+)', (m) => { r.tag = m[1]; });
+  // Метка категории: «#работа», событие-срок: «@защита»
+  take('#([^\\s#@,.!?;]+)', (m) => { r.tag = m[1]; });
+  take('@([^\\s#@,!?;]+)', (m) => { r.mention = m[1].replace(/[._]+$/, ''); });
 
   // Важность: «!», «важно», «срочно» или восклицательный знак в конце
   if (/!\s*$/.test(s)) { s = s.replace(/!+\s*$/, ' '); r.priority = 1; r.matched = true; }
@@ -314,6 +317,7 @@ function parseQuick(input, base = today()) {
     if (!validTime(h1, m1) || !validTime(h2, m2)) return false;
     r.start = `${pad(h1)}:${pad(m1)}`;
     r.end = `${pad(h2)}:${pad(m2)}`;
+    r.range = true;
   });
   if (!r.start) {
     take('(?:(?:в|с) )?(\\d{1,2}):(\\d{2}) ?[-–—] ?(\\d{1,2})(?::(\\d{2}))?', (m) => {
@@ -321,6 +325,7 @@ function parseQuick(input, base = today()) {
       if (!validTime(h1, m1) || !validTime(h2, m2)) return false;
       r.start = `${pad(h1)}:${pad(m1)}`;
       r.end = `${pad(h2)}:${pad(m2)}`;
+      r.range = true;
     });
   }
 
@@ -564,6 +569,14 @@ function taskDeadline(task, ev) {
   return task.due ? { date: task.due, time: task.time || null } : null;
 }
 
+function normalizePlan(p) {
+  if (!p || typeof p !== 'object' || !/^\d{4}-\d{2}-\d{2}$/.test(p.date || '')) return null;
+  const hm = (v) => (typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? v : null);
+  const start = hm(p.start);
+  const end = start ? hm(p.end) : null;
+  return { date: p.date, start, end: end && end > start ? end : null };
+}
+
 function normalizeTask(t) {
   if (!t || typeof t !== 'object' || !t.id) return null;
   const isKey = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
@@ -579,6 +592,8 @@ function normalizeTask(t) {
     doneAt: t.done && Number.isFinite(t.doneAt) ? t.doneAt : null,
     eventId: t.eventId ? String(t.eventId) : null,
     eventKey: t.eventId && isKey(t.eventKey) ? t.eventKey : null,
+    // «Когда делаю»: день и, если задано, промежуток времени
+    plan: normalizePlan(t.plan),
     reminder: normalizeReminder(t.reminder),
     alarmAt: isIsoOrNull(t.alarmAt),
     alarmSig: typeof t.alarmSig === 'string' ? t.alarmSig : null,
@@ -591,6 +606,6 @@ if (typeof module !== 'undefined') {
   module.exports = {
     toKey, fromKey, addDays, addMonths, startOfWeek, wdIndex, toMin, fromMin, endMinutes, spanDays,
     occursOn, collect, nextOccurrence, parseQuick, toICS, fromICS, normalizeEvent, taskDeadline, normalizeTask,
-    normalizeReminder, DEFAULT_QUIET, iso, parseIso, pad,
+    normalizeReminder, normalizePlan, DEFAULT_QUIET, iso, parseIso, pad,
   };
 }

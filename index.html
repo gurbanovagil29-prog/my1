@@ -89,6 +89,7 @@
         <button type="button" class="quick-mode" id="quickMode" title="Что добавлять: событие или задачу (Tab в пустой строке)"></button>
         <input id="quickInput" placeholder="по пятницам в 19 спортзал #личное" aria-label="Быстрое добавление">
         <span class="quick-preview" id="quickPreview"></span>
+        <div class="mention-list" id="mentionList" role="listbox" aria-label="События" hidden></div>
       </form>
 
       <div class="cal-bar" id="calBar" role="group" aria-label="Показывать календари"></div>
@@ -182,12 +183,23 @@
         <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
       </div>
 
-      <label class="field"><span>Связать с событием</span>
+      <div class="field">
+        <span>🕒 Когда делаю</span>
+        <div class="plan-row">
+          <input type="date" id="tPlanDate" aria-label="День">
+          <input type="time" id="tPlanStart" step="300" aria-label="С">
+          <span>–</span>
+          <input type="time" id="tPlanEnd" step="300" aria-label="До">
+          <button type="button" class="icon-btn small" id="tPlanClear" aria-label="Очистить «Когда делаю»">✕</button>
+        </div>
+      </div>
+
+      <label class="field"><span>📅 Срок — к событию</span>
         <select id="tEvent"></select>
       </label>
 
       <div class="field-row" id="tDueRow">
-        <label class="field"><span>Срок</span><input type="date" id="tDue"></label>
+        <label class="field"><span>Свой срок</span><input type="date" id="tDue"></label>
         <label class="field"><span>Время (необязательно)</span><input type="time" id="tTime" step="300"></label>
       </div>
       <p class="muted task-hint" id="tLinkedHint" hidden></p>
@@ -287,6 +299,7 @@
       <li><b>напоминай каждый час, каждые 30 минут, каждые 2 часа с 10 до 19, пока не сделаю</b> — повторять, пока задача не выполнена</li>
       <li><b>в 9, 14 и 21, напомни 3 раза, через 30 минут, напомни … в 18</b> — напоминания задачи</li>
       <li><b>напомни за час и за 10 минут</b> — напоминания события</li>
+      <li><b>@защита, @теория_фин</b> — задача к событию: срок — начало события; «в четверг с 19 до 23» — когда делаю</li>
       <li><b>#работа, #учёба, #личное</b> — календарь (можно начало названия: #раб)</li>
       <li><b>до пятницы, к понедельнику, до 25.10, до 18:00</b> — срок задачи; <b>!</b> или <b>важно</b> — важная</li>
     </ul>
