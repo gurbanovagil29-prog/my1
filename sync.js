@@ -169,7 +169,7 @@ if (typeof module !== 'undefined') {
 /* ---------- Подключение к приложению ---------- */
 
 /* global state, h, $, readJSON, writeJSON, render, toast, normalizeEvent, normalizeTask, normalizeCalendar,
-   STORE_KEY, TASKS_KEY, CALS_KEY, DEFAULT_CALENDARS, closeNav */
+   STORE_KEY, TASKS_KEY, CALS_KEY, DEFAULT_CALENDARS, closeNav, onSyncUser */
 
 const SUPABASE_SRC = 'vendor/supabase-2.117.2.js';
 const sync = {
@@ -306,7 +306,11 @@ async function initSync() {
     sync.user = user;
     if (user) {
       // Запросы к Supabase изнутри этого обработчика могут зависнуть — запускаем следующим тиком
-      setTimeout(startEngine, 0);
+      setTimeout(() => {
+        startEngine();
+        // Подписка этого устройства на push (часовой пояс, ключ сервера)
+        if (typeof onSyncUser === 'function') onSyncUser();
+      }, 0);
       if (event === 'SIGNED_IN') toast(`Вы вошли: ${user.email || 'аккаунт'}. Данные синхронизируются`);
     } else {
       stopEngine();

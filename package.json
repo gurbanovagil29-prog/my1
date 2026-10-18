@@ -5,6 +5,7 @@
   "description": "Удобный календарь на каждый день",
   "scripts": {
     "start": "python3 -m http.server 8080",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "build:edge": "node scripts/build-edge.js"
   }
 }

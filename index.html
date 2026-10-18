@@ -11,9 +11,11 @@
   <link rel="apple-touch-icon" href="icon.svg">
   <link rel="stylesheet" href="style.css">
   <script src="core.js" defer></script>
+  <script src="alarms.js" defer></script>
   <script src="config.js" defer></script>
   <script src="sync.js" defer></script>
   <script src="tasks.js" defer></script>
+  <script src="reminders-ui.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -44,6 +46,7 @@
         <button class="link-btn" id="btnSyncSide" type="button">☁︎ Синхронизация</button>
         <button class="link-btn" id="btnTheme" type="button"></button>
         <button class="link-btn" id="btnNotify" type="button"></button>
+        <button class="link-btn" id="btnQuiet" type="button"></button>
         <details class="side-more">
           <summary class="link-btn">Данные</summary>
           <button class="link-btn" id="btnExportJson" type="button">Скачать резервную копию (.json)</button>
@@ -84,13 +87,14 @@
 
       <form class="quick" id="quickForm" autocomplete="off">
         <button type="button" class="quick-mode" id="quickMode" title="Что добавлять: событие или задачу (Tab в пустой строке)"></button>
-        <input id="quickInput" placeholder="Новое событие…" aria-label="Быстрое добавление">
+        <input id="quickInput" placeholder="по пятницам в 19 спортзал #личное" aria-label="Быстрое добавление">
         <span class="quick-preview" id="quickPreview"></span>
       </form>
 
       <div class="cal-bar" id="calBar" role="group" aria-label="Показывать календари"></div>
 
       <section class="view" id="view"></section>
+      <div class="alarm-bar" id="alarmBar" hidden></div>
     </main>
   </div>
 
@@ -119,19 +123,8 @@
         <label class="field" id="untilWrap"><span>Повторять до</span><input type="date" id="fUntil"></label>
       </div>
 
-      <div class="field-row">
-        <label class="field"><span>Напоминание</span>
-          <select id="fRemind">
-            <option value="">Без напоминания</option>
-            <option value="0">В момент начала</option>
-            <option value="5">За 5 минут</option>
-            <option value="10">За 10 минут</option>
-            <option value="15">За 15 минут</option>
-            <option value="30">За 30 минут</option>
-            <option value="60">За 1 час</option>
-            <option value="1440">За 1 день</option>
-          </select>
-        </label>
+      <div class="field"><span>Напомнить</span>
+        <div class="remind-chips" id="fReminds" role="group" aria-label="За сколько напомнить"></div>
       </div>
 
       <div class="field"><span>Календарь</span>
@@ -205,6 +198,32 @@
 
       <label class="check"><input type="checkbox" id="tPriority"> Важная задача</label>
 
+      <div class="field remind-box">
+        <span>Напоминания</span>
+        <div class="remind-chips" id="tAtList"></div>
+        <div class="remind-add">
+          <input type="datetime-local" id="tAtInput" step="300" aria-label="Когда напомнить">
+          <button type="button" class="btn" id="tAtAdd">Добавить</button>
+        </div>
+        <div class="field-row">
+          <label class="field"><span>Повторять, пока не сделано</span>
+            <select id="tEvery">
+              <option value="">Не повторять</option>
+              <option value="15">Каждые 15 минут</option>
+              <option value="30">Каждые 30 минут</option>
+              <option value="60">Каждый час</option>
+              <option value="120">Каждые 2 часа</option>
+              <option value="180">Каждые 3 часа</option>
+              <option value="240">Каждые 4 часа</option>
+            </select>
+          </label>
+          <div class="field" id="tWindowWrap"><span>Только в эти часы</span>
+            <div class="time-pair"><input type="time" id="tWinFrom" aria-label="С"><span>–</span><input type="time" id="tWinTo" aria-label="До"></div>
+          </div>
+        </div>
+        <p class="muted task-hint" id="tRemindHint"></p>
+      </div>
+
       <label class="field"><span>Заметки</span><textarea id="tNotes" rows="3" placeholder="Детали, ссылки, подзадачи…"></textarea></label>
 
       <div class="dialog-foot">
@@ -222,6 +241,24 @@
       <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
     </div>
     <div id="syncBody"></div>
+  </dialog>
+
+  <dialog class="dialog" id="quietDialog">
+    <form id="quietForm" method="dialog">
+      <div class="dialog-head">
+        <h2>Тихие часы</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+      </div>
+      <p class="muted">В это время повторяющиеся напоминания («каждый час») молчат и продолжаются утром. Напоминания на конкретное время приходят всегда.</p>
+      <div class="field-row">
+        <label class="field"><span>С</span><input type="time" id="qFrom" required></label>
+        <label class="field"><span>До</span><input type="time" id="qTo" required></label>
+      </div>
+      <div class="dialog-foot"><span class="spacer"></span>
+        <button type="button" class="btn" data-close>Отмена</button>
+        <button type="submit" class="btn primary">Сохранить</button>
+      </div>
+    </form>
   </dialog>
 
   <dialog class="dialog help" id="help">
@@ -247,6 +284,9 @@
       <li><b>в 15, в 9:30, в 7 вечера, с 10 до 12, 14:00–15:30</b></li>
       <li><b>каждый день, по будням, по понедельникам, каждый месяц, каждый год</b></li>
       <li><b>с пятницы до воскресенья, на выходных, на следующих выходных, всю неделю, с 20 по 25 октября, на 3 дня</b> — на несколько дней</li>
+      <li><b>напоминай каждый час, каждые 30 минут, каждые 2 часа с 10 до 19, пока не сделаю</b> — повторять, пока задача не выполнена</li>
+      <li><b>в 9, 14 и 21, напомни 3 раза, через 30 минут, напомни … в 18</b> — напоминания задачи</li>
+      <li><b>напомни за час и за 10 минут</b> — напоминания события</li>
       <li><b>#работа, #учёба, #личное</b> — календарь (можно начало названия: #раб)</li>
       <li><b>до пятницы, к понедельнику, до 25.10, до 18:00</b> — срок задачи; <b>!</b> или <b>важно</b> — важная</li>
     </ul>

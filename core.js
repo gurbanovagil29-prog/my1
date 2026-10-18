@@ -157,11 +157,16 @@ function applyPeriod(h, period) {
  * endDate — последний день многодневного события («с пятницы до воскресенья», «на выходных»),
  * spanDays — длительность из «на 3 дня» (конец считается от даты начала), tag — метка категории из «#работа»,
  * priority = 1 для «!» или «важно», matched показывает, что что-то распознано.
+ * Поля напоминаний (every, window, times, count, inMinutes, before, nag, remindWord) описаны у r ниже.
  */
 function parseQuick(input, base = today()) {
   const r = {
     title: '', date: null, endDate: null, spanDays: 0, start: null, end: null,
     repeat: 'none', allDay: false, tag: null, priority: 0, matched: false,
+    // Напоминания: every — повтор в минутах, window — часы повтора, times — «в 9, 14 и 21», count — «3 раза»,
+    // inMinutes — «через 30 минут», before — «за час и за 10 минут» (для событий),
+    // nag — «пока не сделаю», remindWord — во фразе есть «напомни»
+    every: null, window: null, times: null, count: 0, inMinutes: 0, before: null, nag: false, remindWord: false,
   };
   let s = ` ${String(input).replace(/\s+/g, ' ').trim()} `;
   const PERIOD = '(?: (утра|дня|вечера|ночи))?';
@@ -200,6 +205,48 @@ function parseQuick(input, base = today()) {
   // Важность: «!», «важно», «срочно» или восклицательный знак в конце
   if (/!\s*$/.test(s)) { s = s.replace(/!+\s*$/, ' '); r.priority = 1; r.matched = true; }
   take('!+|важно|срочно', () => { r.priority = 1; });
+
+  // Напоминания. Идут раньше времени и повторов: «каждый час», «в 9, 14 и 21», «с 10 до 19» здесь значат другое
+  const REMIND = '(?:(?:напоминай|напоминать|напомни(?:ть)?|пиши)(?: мне)? )?';
+  const unitMinutes = (n, unit) => {
+    const u = unit.toLowerCase();
+    if (u.startsWith('пол')) return 30;
+    if (u.startsWith('ч')) return (n || 1) * 60;
+    if (u.startsWith('д') || u.startsWith('сут')) return (n || 1) * 1440;
+    return n || 1;
+  };
+  take(',? ?пока не (?:сделаю|скажу|отмечу|выполню)', () => { r.nag = true; });
+  take(`${REMIND}(?:каждые|каждый|каждую|раз в) (?:(\\d+) )?(минут[уы]?|мин|час(?:а|ов)?|ч|полчаса)`, (m) => {
+    r.every = Math.max(5, unitMinutes(m[1] ? +m[1] : 0, m[2]));
+  });
+  take(`${REMIND}(?:каждые полчаса|ежечасно)`, (m) => { r.every = /полчаса/i.test(m[0]) ? 30 : 60; });
+  if (r.every) {
+    take('с (\\d{1,2})(?::(\\d{2}))? до (\\d{1,2})(?::(\\d{2}))?', (m) => {
+      const a = +m[1]; const b = +m[3];
+      if (a > 23 || b > 23 || a >= b) return false;
+      r.window = [`${pad(a)}:${m[2] || '00'}`, `${pad(b)}:${m[4] || '00'}`];
+    });
+  }
+  const UNIT = '(?:\\d+ )?(?:минут[уы]?|мин|час(?:а|ов)?|день|дня|дней|сутки|полчаса)';
+  take(`(?:напомни(?:ть)?|напоминание)(?: мне)? за ${UNIT}(?:(?:,|,? и) за ${UNIT})*`, (m) => {
+    r.before = [...m[0].matchAll(/за (?:(\d+) )?([а-яё]+)/giu)].map((x) => unitMinutes(x[1] ? +x[1] : 0, x[2]));
+  });
+  const COUNT = { два: 2, две: 2, дважды: 2, три: 3, трижды: 3, четыре: 4, пять: 5 };
+  take('напомни(?:ть)?(?: мне)? (\\d+|два|две|три|четыре|пять|дважды|трижды)(?: раза?)?', (m) => {
+    const n = COUNT[m[1].toLowerCase()] || +m[1];
+    if (!(n >= 1 && n <= 10)) return false;
+    r.count = n;
+  });
+  const T = '\\d{1,2}(?::\\d{2})?';
+  take(`${REMIND}в ${T}(?:(?:, ?${T})+(?:,? и ${T})?| и ${T})`, (m) => {
+    const times = [...m[0].matchAll(/(\d{1,2})(?::(\d{2}))?/g)].map((x) => [+x[1], +(x[2] || 0)]);
+    if (times.some(([hh, mm]) => hh > 23 || mm > 59)) return false;
+    r.times = [...new Set(times.map(([hh, mm]) => `${pad(hh)}:${pad(mm)}`))].sort();
+  });
+  take('через (?:(\\d+) )?(минут[уы]?|мин|час(?:а|ов)?|полчаса)', (m) => {
+    r.inMinutes = unitMinutes(m[1] ? +m[1] : 0, m[2]);
+  });
+  take('напомни(?:ть)?(?: мне)?|напоминай|напоминать', () => { r.remindWord = true; });
 
   // Повторы
   take('каждый день|ежедневно', () => { r.repeat = 'daily'; });
@@ -374,8 +421,8 @@ function toICS(events, categoryOf) {
         lines.push(ev.start ? `EXDATE:${icsDateTime(ex, ev.start)}` : `EXDATE;VALUE=DATE:${icsDate(ex)}`);
       }
     }
-    if (ev.remind != null) {
-      lines.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsEscape(ev.title)}`, `TRIGGER:-PT${ev.remind}M`, 'END:VALARM');
+    for (const m of ev.reminds || []) {
+      lines.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsEscape(ev.title)}`, `TRIGGER:-PT${m}M`, 'END:VALARM');
     }
     lines.push('END:VEVENT');
   }
@@ -421,7 +468,7 @@ function fromICS(text, makeId) {
     const value = line.slice(i + 1);
     if (inAlarm) {
       const t = name === 'TRIGGER' && value.match(/^-P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?/);
-      if (t) cur.remind = (+(t[1] || 0)) * 1440 + (+(t[2] || 0)) * 60 + (+(t[3] || 0));
+      if (t) (cur.reminds ||= []).push((+(t[1] || 0)) * 1440 + (+(t[2] || 0)) * 60 + (+(t[3] || 0)));
       continue;
     }
     if (name === 'SUMMARY') cur.title = icsUnescape(value);
@@ -463,8 +510,44 @@ function normalizeEvent(e) {
     until: /^\d{4}-\d{2}-\d{2}$/.test(e.until || '') ? e.until : null,
     exdates: Array.isArray(e.exdates) ? e.exdates.filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x)) : [],
     cal: typeof e.cal === 'string' ? e.cal : '',
-    remind: Number.isFinite(e.remind) && e.remind >= 0 ? e.remind : null,
+    // За сколько минут до начала напомнить; старое поле remind (одно число) превращается в список
+    reminds: [...new Set((Array.isArray(e.reminds) ? e.reminds : (e.remind != null ? [e.remind] : []))
+      .filter((m) => Number.isFinite(m) && m >= 0 && m <= 7 * 1440).map(Math.round))].sort((a, b) => b - a),
+    snooze: isIsoOrNull(e.snooze),
+    alarmAt: isIsoOrNull(e.alarmAt),
+    alarmSig: typeof e.alarmSig === 'string' ? e.alarmSig : null,
+    alarmLast: isIsoOrNull(e.alarmLast),
     notes: String(e.notes || ''),
+  };
+}
+
+/* ---------- Напоминания (правило задачи; расчёт — в alarms.js) ---------- */
+
+const DEFAULT_QUIET = ['23:30', '07:00'];
+const iso = (ms) => new Date(ms).toISOString();
+const parseIso = (s) => (typeof s === 'string' && !Number.isNaN(Date.parse(s)) ? Date.parse(s) : null);
+const isIsoOrNull = (s) => (parseIso(s) == null ? null : iso(parseIso(s)));
+
+/** Приводит reminder задачи к ожидаемой форме; пустое правило — null. */
+function normalizeReminder(r) {
+  if (!r || typeof r !== 'object') return null;
+  const hm = (t) => (typeof t === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t) ? t : null);
+  const pair = (p) => (Array.isArray(p) && hm(p[0]) && hm(p[1]) ? [p[0], p[1]] : null);
+  const at = (Array.isArray(r.at) ? r.at : []).map(parseIso).filter((x) => x != null)
+    .sort((a, b) => a - b).slice(0, 30).map(iso);
+  const every = Number.isFinite(r.every) && r.every >= 5 ? Math.min(Math.round(r.every), 24 * 60) : null;
+  const snooze = parseIso(r.snooze);
+  if (!at.length && !every && snooze == null) return null;
+  return {
+    at,
+    every,
+    from: every ? iso(parseIso(r.from) ?? Date.now()) : null,
+    window: every ? pair(r.window) : null,
+    until: every && parseIso(r.until) != null ? iso(parseIso(r.until)) : null,
+    keepAfter: Boolean(every && r.keepAfter),
+    snooze: snooze == null ? null : iso(snooze),
+    quiet: pair(r.quiet) || DEFAULT_QUIET.slice(),
+    tz: typeof r.tz === 'string' && r.tz ? r.tz : null,
   };
 }
 
@@ -496,6 +579,10 @@ function normalizeTask(t) {
     doneAt: t.done && Number.isFinite(t.doneAt) ? t.doneAt : null,
     eventId: t.eventId ? String(t.eventId) : null,
     eventKey: t.eventId && isKey(t.eventKey) ? t.eventKey : null,
+    reminder: normalizeReminder(t.reminder),
+    alarmAt: isIsoOrNull(t.alarmAt),
+    alarmSig: typeof t.alarmSig === 'string' ? t.alarmSig : null,
+    alarmLast: isIsoOrNull(t.alarmLast),
     notes: String(t.notes || ''),
   };
 }
@@ -504,5 +591,6 @@ if (typeof module !== 'undefined') {
   module.exports = {
     toKey, fromKey, addDays, addMonths, startOfWeek, wdIndex, toMin, fromMin, endMinutes, spanDays,
     occursOn, collect, nextOccurrence, parseQuick, toICS, fromICS, normalizeEvent, taskDeadline, normalizeTask,
+    normalizeReminder, DEFAULT_QUIET, iso, parseIso, pad,
   };
 }

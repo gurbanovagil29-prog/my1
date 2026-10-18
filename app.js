@@ -6,11 +6,12 @@
    TASKS_KEY, loadTasks, saveTasks, findTask, visibleTasks, deadlineOf, isOverdue, tasksByDay, linkedTasks, detachTasks,
    deadlineLabel, overdueLabel, taskChip, taskLine, deadlineMarker, progressBadge, moveTask, renderTasksView,
    taskBadgeCount, openTaskEditor, initTasks, renderEvTasks, commitPendingTasks, compareTasks,
-   syncSoon, initSync, openSyncDialog, renderSyncStatus */
+   syncSoon, initSync, openSyncDialog, renderSyncStatus,
+   refreshAlarms, runLocalAlarms, enableReminders, notifyStatusText, quietLabel, initReminders, initTaskReminderFields,
+   setEditorReminds, editorReminds, reminderFromParse, describeReminder, userTz, quietHours, iso */
 
 const STORE_KEY = 'everyday-calendar:events';
 const SETTINGS_KEY = 'everyday-calendar:settings';
-const FIRED_KEY = 'everyday-calendar:fired';
 const CALS_KEY = 'everyday-calendar:calendars';
 const HOUR_H = 48;
 const COLORS = ['#4f6bed', '#e5484d', '#f76b15', '#f5a524', '#30a46c', '#12a594', '#8e4ec6', '#e93d82', '#6b7280'];
@@ -34,6 +35,9 @@ function readJSON(key, fallback) {
 
 function writeJSON(key, value) {
   try {
+    // Перед записью событий и задач пересчитываем, когда напомнить в следующий раз
+    if (key === STORE_KEY) refreshAlarms('event', value);
+    if (key === TASKS_KEY) refreshAlarms('task', value);
     localStorage.setItem(key, JSON.stringify(value));
     if (key === STORE_KEY || key === TASKS_KEY || key === CALS_KEY) syncSoon();
     return true;
@@ -836,13 +840,8 @@ function renderSideList() {
 function renderFooter() {
   const theme = state.settings.theme;
   $('#btnTheme').textContent = `Тема: ${{ auto: 'как в системе', light: 'светлая', dark: 'тёмная' }[theme]}`;
-  const perm = 'Notification' in window ? Notification.permission : 'unsupported';
-  $('#btnNotify').textContent = {
-    granted: '🔔 Напоминания включены',
-    denied: '🔕 Уведомления запрещены в браузере',
-    default: '🔔 Включить напоминания',
-    unsupported: '🔕 Уведомления не поддерживаются',
-  }[perm];
+  $('#btnNotify').textContent = notifyStatusText();
+  $('#btnQuiet').textContent = quietLabel();
 }
 
 function applyTheme() {
@@ -867,7 +866,6 @@ const f = {
   end: $('#fEnd'),
   repeat: $('#fRepeat'),
   until: $('#fUntil'),
-  remind: $('#fRemind'),
   notes: $('#fNotes'),
   cal: $('#fCal'),
 };
@@ -916,7 +914,7 @@ function openEditor({ ev = null, key = null, preset = {} } = {}) {
       repeat: preset.repeat || 'none',
       until: null,
       cal: preset.cal || defaultCal(),
-      remind: state.settings.defaultRemind,
+      reminds: preset.reminds || (s ? [state.settings.defaultRemind] : []),
       notes: '',
     };
   }
@@ -931,7 +929,7 @@ function openEditor({ ev = null, key = null, preset = {} } = {}) {
   f.end.value = v.start ? fromMin(endMinutes(v)) : '10:00';
   f.repeat.value = v.repeat;
   f.until.value = v.until || '';
-  f.remind.value = v.remind == null ? '' : String(v.remind);
+  setEditorReminds(v.reminds || []);
   f.notes.value = v.notes || '';
   pickedCal = calOf(v).id;
   renderCalPicker();
@@ -963,7 +961,7 @@ function readEditor() {
     repeat,
     until: repeat !== 'none' && f.until.value ? f.until.value : null,
     cal: pickedCal,
-    remind: f.remind.value === '' ? null : Number(f.remind.value),
+    reminds: editorReminds(),
     notes: f.notes.value.trim(),
   };
 }
@@ -1128,13 +1126,17 @@ $('#btnDeleteCal').addEventListener('click', () => {
 const quickInput = $('#quickInput');
 
 const TASK_PREFIX = /^\s*(?:задача|todo|\[\s?\])\s*[:\-–]?\s*/i;
-const quickIsTask = () => state.quickMode === 'task' || TASK_PREFIX.test(quickInput.value);
+/** Фраза про повторяющиеся или многократные напоминания — это задача: её надо отметить «сделано». */
+const remindsLikeTask = (r) => Boolean(r.every || r.times || r.count || r.inMinutes || r.nag);
+const quickIsTask = (r = null) => state.quickMode === 'task' || TASK_PREFIX.test(quickInput.value)
+  || remindsLikeTask(r || parseQuick(quickInput.value, today()));
 
 function renderQuickMode() {
   const task = quickIsTask();
-  $('#quickMode').textContent = task ? '☑ Задача' : '⚡ Событие';
+  $('#quickMode').replaceChildren(h('span', {}, task ? '☑' : '⚡'), h('span', { class: 'quick-mode-label' }, task ? ' Задача' : ' Событие'));
+  $('#quickMode').setAttribute('aria-label', task ? 'Режим: задача' : 'Режим: событие');
   $('#quickMode').classList.toggle('is-task', task);
-  quickInput.placeholder = task ? 'Новая задача…' : 'Новое событие…';
+  quickInput.placeholder = task ? 'Новая задача…' : 'по пятницам в 19 спортзал #личное';
 }
 
 function quickParse() {
@@ -1159,25 +1161,46 @@ function updateQuickPreview() {
   const r = quickParse();
   const cal = r.cal || state.calendars.find((c) => c.id === defaultCal());
   let parts;
-  if (quickIsTask()) {
+  const isTask = quickIsTask(r);
+  if (isTask) {
     const dl = quickTaskDeadline(r);
     parts = [dl ? `срок ${deadlineLabel(dl)}` : 'без срока'];
     if (r.priority) parts.push('важная');
+    const rule = quickTaskReminder(r, dl);
+    if (rule) parts.push(`🔔 ${describeReminder(rule, Date.now(), userTz())}`);
   } else {
     parts = [quickDateLabel(r), r.start ? `${r.start}–${r.end}` : (r.endDate ? `${spanDays({ date: toKey(r.date), endDate: toKey(r.endDate) })} дн.` : 'весь день')];
     if (r.repeat !== 'none') parts.push(REPEAT_LABELS[r.repeat].toLowerCase());
+    if (r.before) parts.push(`🔔 за ${r.before.map(remindLabel).join(' и за ')}`);
   }
   preview.replaceChildren(
-    `${quickIsTask() ? '☑ ' : ''}${r.title || 'Без названия'} · ${parts.join(', ')} · `,
+    `${isTask ? '☑ ' : ''}${r.title || 'Без названия'} · ${parts.join(', ')} · `,
     h('span', { class: 'quick-cal', style: { '--c': cal.color } }, r.tag && !r.cal ? `#${r.tag}?` : cal.name),
   );
 }
 
 /** Срок задачи из фразы: дата, если названа; время без даты — сегодня; иначе без срока. */
 function quickTaskDeadline(r) {
-  if (!r.hasDate && !r.start) return null;
+  // «через 30 минут» — срок через 30 минут; «в 9, 14 и 21», «3 раза» — сегодня
+  if (!r.hasDate && r.inMinutes) {
+    const d = new Date(Date.now() + r.inMinutes * 60000);
+    return { date: toKey(d), time: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
+  }
+  if (!r.hasDate && !r.start) return r.times || r.count ? { date: toKey(today()), time: null } : null;
   // «до конца недели», «с пятницы по воскресенье» — срок задачи последний день периода
   return { date: toKey(r.endDate || (r.hasDate ? r.date : today())), time: r.start };
+}
+
+/** Правило напоминаний задачи из фразы (null — напомнить по умолчанию, за час до срока). */
+function quickTaskReminder(r, dl) {
+  return reminderFromParse(r, { now: Date.now(), tz: userTz(), quiet: quietHours(), dueKey: dl?.date || null, dueTime: dl?.time || null });
+}
+
+/** «1 ч», «10 мин», «1 дн.» — для подписи «напомнить за …». */
+function remindLabel(m) {
+  if (m % 1440 === 0) return m === 1440 ? 'день' : `${m / 1440} дн.`;
+  if (m % 60 === 0) return `${m / 60} ч`;
+  return `${m} мин`;
 }
 
 function toggleQuickMode() {
@@ -1195,10 +1218,10 @@ quickInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && e.shiftKey) {
     e.preventDefault();
     const r = quickParse();
-    if (quickIsTask()) {
+    if (quickIsTask(r)) {
       const dl = quickTaskDeadline(r);
-      openTaskEditor(null, { title: r.title, due: dl?.date, time: dl?.time, priority: r.priority, cal: r.cal?.id });
-    } else openEditor({ preset: { title: r.title, date: toKey(r.date), start: r.start, end: r.end, repeat: r.repeat, allDay: !r.start, cal: r.cal?.id, endDate: r.endDate ? toKey(r.endDate) : null } });
+      openTaskEditor(null, { title: r.title, due: dl?.date, time: dl?.time, priority: r.priority, cal: r.cal?.id, reminder: quickTaskReminder(r, dl) });
+    } else openEditor({ preset: { title: r.title, date: toKey(r.date), start: r.start, end: r.end, repeat: r.repeat, allDay: !r.start, cal: r.cal?.id, endDate: r.endDate ? toKey(r.endDate) : null, reminds: r.before || undefined } });
     quickInput.value = '';
     updateQuickPreview();
   }
@@ -1208,7 +1231,7 @@ $('#quickForm').addEventListener('submit', (e) => {
   e.preventDefault();
   if (!quickInput.value.trim()) return;
   const r = quickParse();
-  if (quickIsTask()) {
+  if (quickIsTask(r)) {
     addQuickTask(r);
     return;
   }
@@ -1223,7 +1246,7 @@ $('#quickForm').addEventListener('submit', (e) => {
     until: null,
     exdates: [],
     cal: r.cal ? r.cal.id : defaultCal(),
-    remind: r.start ? state.settings.defaultRemind : null,
+    reminds: r.before || (r.start ? [state.settings.defaultRemind] : []),
     notes: '',
   };
   const cal = calOf(ev);
@@ -1255,10 +1278,12 @@ function addQuickTask(r) {
     doneAt: null,
     eventId: null,
     eventKey: null,
+    reminder: quickTaskReminder(r, dl),
     notes: '',
   };
   const cal = calOf(task);
-  withUndo(`Задача в «${cal.name}»: ${task.title}${dl ? ` · срок ${deadlineLabel(dl)}` : ''}`, () => {
+  const bell = task.reminder ? ` · 🔔 ${describeReminder(task.reminder, Date.now(), userTz())}` : '';
+  withUndo(`Задача в «${cal.name}»: ${task.title}${dl ? ` · срок ${deadlineLabel(dl)}` : ''}${bell}`, () => {
     state.tasks.push(task);
     cal.visible = true;
   });
@@ -1339,61 +1364,7 @@ document.addEventListener('click', (e) => {
 
 /* ---------- Напоминания ---------- */
 
-async function showNotification(title, body) {
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  try {
-    const reg = await navigator.serviceWorker?.getRegistration();
-    if (reg) await reg.showNotification(title, { body, icon: 'icon.svg', tag: title + body });
-    else new Notification(title, { body, icon: 'icon.svg' });
-  } catch {
-    // Уведомление на экране уже показано
-  }
-}
-
-function checkReminders() {
-  const now = Date.now();
-  const fired = readJSON(FIRED_KEY, {}) || {};
-  const t = today();
-  for (const [key, list] of collect(state.events, t, addDays(t, 1))) {
-    for (const { ev, index } of list) {
-      if (ev.remind == null || index > 0) continue;
-      const d = fromKey(key);
-      const startMin = ev.start ? toMin(ev.start) : 9 * 60;
-      const at = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, startMin - ev.remind).getTime();
-      const id = `${ev.id}@${key}@${ev.start}@${ev.remind}`;
-      // Окно 15 минут: не засыпаем старыми напоминаниями, если вкладку открыли позже
-      if (fired[id] || now < at || now - at > 15 * 60 * 1000) continue;
-      fired[id] = now;
-      const when = ev.start
-        ? (ev.remind === 0 ? `Сейчас, ${ev.start}` : `${relativeDay(d) || formatDate(d)} в ${ev.start}`)
-        : `${relativeDay(d) || formatDate(d)}, весь день`;
-      toast(`🔔 ${ev.title} — ${when}`, { reminder: true, duration: 15000 });
-      showNotification(ev.title, when);
-    }
-  }
-  // Задачи со временем: напоминаем за час до срока
-  for (const task of state.tasks) {
-    const dl = !task.done && deadlineOf(task);
-    if (!dl || !dl.time) continue;
-    const at = deadlineMoment(dl).getTime() - 60 * 60 * 1000;
-    const id = `task:${task.id}@${dl.date}@${dl.time}`;
-    if (fired[id] || now < at || now - at > 15 * 60 * 1000) continue;
-    fired[id] = now;
-    toast(`⚑ Через час срок: ${task.title}`, { reminder: true, duration: 15000 });
-    showNotification(`Срок через час: ${task.title}`, deadlineLabel(dl));
-  }
-  for (const [k, ts] of Object.entries(fired)) if (now - ts > 3 * 86400000) delete fired[k];
-  writeJSON(FIRED_KEY, fired);
-}
-
-$('#btnNotify').addEventListener('click', async () => {
-  if (!('Notification' in window)) return toast('Этот браузер не поддерживает уведомления');
-  if (Notification.permission === 'granted') return toast('Напоминания придут, пока календарь открыт в браузере или установлен как приложение');
-  if (Notification.permission === 'denied') return toast('Разрешите уведомления для сайта в настройках браузера');
-  const p = await Notification.requestPermission();
-  renderFooter();
-  if (p === 'granted') toast('Готово! Напоминания включены');
-});
+$('#btnNotify').addEventListener('click', enableReminders);
 
 /* ---------- Экран уведомлений ---------- */
 
@@ -1570,7 +1541,7 @@ setInterval(() => {
     $('#taskBadge').hidden = !badge;
     $('#taskBadge').textContent = badge;
   }
-  checkReminders();
+  runLocalAlarms();
 }, 30000);
 
 // На телефоне экранная клавиатура не уменьшает 100dvh: подгоняем высоту приложения под видимую область,
@@ -1600,6 +1571,8 @@ if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
 }
 
 initTasks();
+initTaskReminderFields();
 render();
-checkReminders();
+initReminders();
+runLocalAlarms();
 initSync();

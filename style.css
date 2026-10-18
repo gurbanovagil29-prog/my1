@@ -899,6 +899,62 @@ details.task-group[open] > summary::after { transform: rotate(90deg); }
 
 .app[data-view="tasks"] .nav-arrows, .app[data-view="tasks"] #btnToday { visibility: hidden; }
 
+/* ---------- Напоминания ---------- */
+.alarm-bar {
+  position: fixed;
+  right: 24px;
+  top: 116px;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(380px, calc(100vw - 24px));
+}
+.alarm-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 10px;
+  padding: 14px 14px 12px 16px;
+  border-radius: 16px;
+  border-left: 4px solid var(--c, var(--accent));
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  animation: pop .2s ease-out;
+}
+.alarm-text strong { display: block; font-size: 15px; }
+.alarm-text small { display: block; color: var(--muted); margin-top: 2px; }
+.alarm-close { width: 28px; height: 28px; font-size: 15px; color: var(--muted); }
+.alarm-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.btn.small { padding: 5px 10px; font-size: 13px; border-radius: 9px; }
+
+.remind-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.remind-chips:empty { display: none; }
+.remind-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+.remind-chip[aria-pressed="true"], .remind-chip.is-on {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.remind-chip.is-past { opacity: .5; text-decoration: line-through; }
+.remind-chip button { border: 0; background: none; padding: 0 2px; color: var(--muted); }
+.remind-box { gap: 8px; }
+.remind-add { display: flex; gap: 8px; }
+.remind-add input { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); }
+.time-pair { display: flex; align-items: center; gap: 6px; }
+.time-pair input { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); }
+.task-bell { color: var(--accent); }
+
 /* ---------- Синхронизация ---------- */
 .sync-btn { font-size: 17px; color: var(--muted); }
 .sync-btn[data-status="ok"] { color: #30a46c; }
@@ -980,6 +1036,8 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: va
   }
   .quick-preview:empty { display: none; }
   .toasts { bottom: calc(76px + env(safe-area-inset-bottom)); }
+  /* Плашка напоминания на телефоне — над строкой ввода, на всю ширину */
+  .alarm-bar { top: auto; right: 12px; left: 12px; width: auto; bottom: calc(76px + env(safe-area-inset-bottom)); }
   .cal-bar { display: flex; gap: 6px; overflow-x: auto; margin: 0 12px 10px; scrollbar-width: none; }
   .cal-bar::-webkit-scrollbar { display: none; }
   .view { margin: 0 12px 10px; }
@@ -998,7 +1056,9 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: va
   .task-cal { display: none; }
   .segmented button { padding: 5px 4px; font-size: 13px; white-space: nowrap; }
   .segmented .badge { min-width: 16px; height: 16px; margin-left: 3px; padding: 0 4px; font-size: 10px; }
-  .quick-mode { padding: 5px 8px; }
+  .quick-mode { padding: 5px 9px; }
+  .quick-mode-label { display: none; }
+  .quick input::placeholder { font-size: 14px; }
   .chip-title { text-overflow: clip; }
   .more { font-size: 10px; padding: 0 3px; }
   .day-panel {

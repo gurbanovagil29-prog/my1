@@ -7,7 +7,8 @@
 
 /* global HOUR_H, state, h, $, readJSON, writeJSON, uid, calOf, colorOf, defaultCal, findEvent, render, toast, withUndo,
    relativeDay, formatDate, capitalize, makeDraggable, openNav, closeNav, editing, CALS_KEY, saveEvents,
-   toKey, fromKey, today, addDays, startOfWeek, toMin, fromMin, collect, taskDeadline, normalizeTask, WD_SHORT */
+   toKey, fromKey, today, addDays, startOfWeek, toMin, fromMin, collect, taskDeadline, normalizeTask, WD_SHORT,
+   fillTaskReminder, buildTaskReminder, describeReminder, userTz, localParts */
 
 const TASKS_KEY = 'everyday-calendar:tasks';
 
@@ -284,6 +285,10 @@ function taskRow(task, group) {
     else meta.push(deadlineLabel(dl));
   }
   if (ev) meta.push(h('span', { class: 'task-event' }, `📅 ${ev.title}`));
+  if (!task.done && task.reminder) {
+    const next = task.alarmAt ? `следующее в ${localParts(Date.parse(task.alarmAt), userTz()).hm}` : '';
+    meta.push(h('span', { class: 'task-bell' }, `🔔 ${[describeReminder(task.reminder, Date.now(), userTz()), next].filter(Boolean).join(' · ')}`));
+  }
   if (task.notes) meta.push(h('span', { class: 'task-notes' }, task.notes.split('\n')[0]));
   return h('div', { class: taskClasses(task, 'task-row'), style: { '--c': colorOf(task) } },
     taskCheck(task),
@@ -360,6 +365,7 @@ function openTaskEditor(task = null, preset = {}) {
     priority: preset.priority || 0,
     eventId: preset.eventId || null,
     eventKey: preset.eventKey || null,
+    reminder: preset.reminder || null,
     notes: '',
   };
   $('#tTitle').value = v.title;
@@ -374,8 +380,18 @@ function openTaskEditor(task = null, preset = {}) {
   renderTaskCalPicker();
   $('#btnDeleteTask').hidden = !task;
   syncTaskLink();
+  fillTaskReminder(v, taskEditorDraft);
   $('#taskEditor').showModal();
   $('#tTitle').focus();
+}
+
+/** Срок и правило напоминаний — такими, как они сейчас в полях окна задачи. */
+function taskEditorDraft() {
+  const [eventId, eventKey] = $('#tEvent').value.split('|');
+  const due = eventId ? null : ($('#tDue').value || ($('#tTime').value ? toKey(today()) : null));
+  const time = eventId ? null : ($('#tTime').value || null);
+  const dl = eventId ? deadlineOf({ eventId, eventKey: eventKey || null }) : (due ? { date: due, time } : null);
+  return { due: dl?.date || null, time: dl?.time || null, eventId: eventId || null, reminder: buildTaskReminder(dl) };
 }
 
 function initTasks() {
@@ -396,6 +412,7 @@ function initTasks() {
       priority: $('#tPriority').checked ? 1 : 0,
       eventId: eventId || null,
       eventKey: eventKey || null,
+      reminder: taskEditorDraft().reminder,
       notes: $('#tNotes').value.trim(),
     };
     if (data.time && !data.due) data.due = toKey(today());
