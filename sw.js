@@ -1,5 +1,5 @@
-// Офлайн-режим: отдаём файлы из кэша и обновляем кэш в фоне.
-const CACHE = 'everyday-calendar-v5';
+// Офлайн-режим: файлы приложения хранятся в кэше на случай, если сети нет.
+const CACHE = 'everyday-calendar-v7';
 const ASSETS = [
   './', 'index.html', 'style.css', 'config.js', 'core.js', 'sync.js', 'tasks.js', 'app.js',
   'vendor/supabase-2.117.2.js', 'manifest.webmanifest', 'icon.svg',
@@ -17,20 +17,27 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+// Сначала сеть: при интернете сразу открывается свежая версия. Кэш — запасной вариант без сети
+// или когда сеть отвечает дольше 4 секунд.
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
-  e.respondWith(
-    caches.open(CACHE).then(async (cache) => {
-      const cached = await cache.match(e.request, { ignoreSearch: true });
-      const fresh = fetch(e.request)
-        .then((res) => {
-          if (res.ok) cache.put(e.request, res.clone());
-          return res;
-        })
-        .catch(() => cached);
-      return cached || fresh;
-    }),
-  );
+  e.respondWith((async () => {
+    const cache = await caches.open(CACHE);
+    const network = fetch(e.request, { cache: 'no-cache' }).then((res) => {
+      if (res.ok) cache.put(e.request, res.clone());
+      return res;
+    });
+    network.catch(() => {}); // если ответ взят из кэша, ошибка сети уже не важна
+    const timeout = new Promise((resolve) => { setTimeout(resolve, 4000); });
+    try {
+      const res = await Promise.race([network, timeout]);
+      if (res) return res;
+    } catch {
+      // Нет сети — ниже возьмём из кэша
+    }
+    const cached = await cache.match(e.request, { ignoreSearch: true });
+    return cached || network;
+  })());
 });
 
 self.addEventListener('notificationclick', (e) => {
