@@ -1134,9 +1134,7 @@ function renderQuickMode() {
   const task = quickIsTask();
   $('#quickMode').textContent = task ? '☑ Задача' : '⚡ Событие';
   $('#quickMode').classList.toggle('is-task', task);
-  quickInput.placeholder = task
-    ? 'Задача: «сдать отчёт до пятницы 18:00 #работа !», «купить подарок к субботе»'
-    : 'Событие: «завтра в 15 встреча с Аней», «по пятницам в 19 спортзал #личное»';
+  quickInput.placeholder = task ? 'Новая задача…' : 'Новое событие…';
 }
 
 function quickParse() {
@@ -1574,6 +1572,20 @@ setInterval(() => {
   }
   checkReminders();
 }, 30000);
+
+// На телефоне экранная клавиатура не уменьшает 100dvh: подгоняем высоту приложения под видимую область,
+// чтобы строка быстрого добавления внизу стояла над клавиатурой, а не под ней
+if (window.visualViewport) {
+  const fitViewport = () => {
+    const vv = window.visualViewport;
+    if (Math.abs(vv.scale - 1) > 0.01) return; // страницу увеличили щипком — высоту не трогаем
+    document.documentElement.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
+    if (window.scrollY) window.scrollTo(0, 0);
+  };
+  window.visualViewport.addEventListener('resize', fitViewport);
+  window.visualViewport.addEventListener('scroll', fitViewport);
+  fitViewport();
+}
 
 if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
   // Вышла новая версия — новый сервис-воркер берёт управление, и страница один раз перезагружается

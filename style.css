@@ -75,7 +75,8 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .app {
   display: grid;
   grid-template-columns: 264px 1fr;
-  height: 100dvh;
+  /* --vvh — видимая высота без экранной клавиатуры (ставит app.js на телефоне) */
+  height: var(--vvh, 100dvh);
 }
 
 .sidebar {
@@ -960,11 +961,28 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: va
   .search-results { left: 0; right: 0; width: auto; }
   .segmented { order: 4; flex: 1 1 100%; }
   .segmented button { flex: 1; }
-  .quick { margin: 0 12px 10px; }
+  /* Быстрая строка внизу экрана — под большим пальцем; при открытой клавиатуре стоит прямо над ней */
+  .quick {
+    order: 10;
+    flex-wrap: wrap;
+    margin: 0 12px max(10px, env(safe-area-inset-bottom));
+    column-gap: 8px;
+    box-shadow: 0 -2px 14px rgba(0, 0, 0, .08);
+  }
+  .view { margin-bottom: 10px; }
+  .quick-preview {
+    display: block;
+    order: -1;
+    flex: 1 0 100%;
+    max-width: none;
+    padding-top: 8px;
+    font-size: 12px;
+  }
+  .quick-preview:empty { display: none; }
+  .toasts { bottom: calc(76px + env(safe-area-inset-bottom)); }
   .cal-bar { display: flex; gap: 6px; overflow-x: auto; margin: 0 12px 10px; scrollbar-width: none; }
   .cal-bar::-webkit-scrollbar { display: none; }
-  .quick-preview { display: none; }
-  .view { margin: 0 12px 12px; }
+  .view { margin: 0 12px 10px; }
   .cell { padding: 2px; }
   .cell-num { min-width: 22px; height: 22px; font-size: 12px; padding: 0 4px; }
   .cell-add { display: none; }
