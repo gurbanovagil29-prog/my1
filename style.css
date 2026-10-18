@@ -409,6 +409,22 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .chip.is-allday { background: color-mix(in srgb, var(--c) 18%, var(--surface)); color: var(--text); font-weight: 500; }
 .chip.is-allday::before { display: none; }
 .chip.is-allday:hover { background: color-mix(in srgb, var(--c) 28%, var(--surface)); }
+.chip, .chip-spacer { flex: none; height: 20px; }
+.chip.is-span {
+  margin: 0 -5px;
+  padding-left: 9px;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--c) 24%, var(--surface));
+  color: var(--text);
+  font-weight: 500;
+}
+.chip.is-span::before { display: none; }
+.chip.is-span:hover { background: color-mix(in srgb, var(--c) 34%, var(--surface)); }
+.chip.is-span.span-head { margin-left: 0; padding-left: 6px; border-top-left-radius: 6px; border-bottom-left-radius: 6px; box-shadow: inset 3px 0 0 var(--c); }
+.chip.is-span.span-tail { margin-right: 0; border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+.tg-allday-cell .chip.is-span { margin: 0 -4px; }
+.tg-allday-cell .chip.is-span.span-head { margin-left: 0; }
+.tg-allday-cell .chip.is-span.span-tail { margin-right: 0; }
 .is-dragging { opacity: .4; }
 .drop-over { background: var(--accent-soft) !important; }
 
@@ -953,6 +969,9 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: va
   .cell-num { min-width: 22px; height: 22px; font-size: 12px; padding: 0 4px; }
   .cell-add { display: none; }
   .chip { padding: 0 3px; font-size: 10px; border-radius: 4px; background: color-mix(in srgb, var(--c) 22%, transparent); }
+  .chip, .chip-spacer { height: 15px; }
+  .chip.is-span { margin: 0 -3px; padding-left: 4px; }
+  .chip.is-span.span-head { padding-left: 4px; }
   .chip::before, .chip-time { display: none; }
   .chip.is-task .task-check, .chip .ev-progress { display: none; }
   .chip.is-task { border-style: dashed; }

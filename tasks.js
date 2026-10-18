@@ -321,7 +321,8 @@ function eventOptions(current) {
   const opts = [h('option', { value: '' }, 'Без события — свой срок')];
   let found = false;
   for (const [key, list] of collect(state.events, addDays(t, -7), addDays(t, 60))) {
-    for (const { ev } of list) {
+    for (const { ev, index } of list) {
+      if (index > 0) continue; // многодневное — только в первый день
       const value = `${ev.id}|${ev.repeat === 'none' ? '' : key}`;
       if (value === current) found = true;
       opts.push(h('option', { value }, `${capitalize(formatDate(fromKey(key)))}${ev.start ? `, ${ev.start}` : ''} · ${ev.title}`));

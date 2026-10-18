@@ -13,7 +13,7 @@ const parse = (text) => {
 
 test('быстрое добавление: дата, время и название', () => {
   assert.deepEqual(parse('завтра в 15 встреча с Аней'), {
-    title: 'Встреча с Аней', date: '2026-10-18', start: '15:00', end: '16:00', repeat: 'none', allDay: false, tag: null, priority: 0, matched: true,
+    title: 'Встреча с Аней', date: '2026-10-18', start: '15:00', end: '16:00', repeat: 'none', allDay: false, tag: null, priority: 0, matched: true, endDate: null, spanDays: 0,
   });
   assert.equal(parse('через 3 дня в 7 вечера кино').start, '19:00');
   assert.equal(parse('через 3 дня в 7 вечера кино').date, '2026-10-20');
@@ -103,6 +103,59 @@ test('нормализация задачи', () => {
   assert.equal(t.done, true);
   assert.equal(t.doneAt, 5);
   assert.equal(t.priority, 1);
+});
+
+test('быстрое добавление: события на несколько дней', () => {
+  const range = (text, base = BASE) => {
+    const r = c.parseQuick(text, base);
+    return [r.title, r.date && c.toKey(r.date), r.endDate && c.toKey(r.endDate), r.start];
+  };
+  assert.deepEqual(range('с пятницы до воскресенья дача'), ['Дача', '2026-10-23', '2026-10-25', null]);
+  assert.deepEqual(range('с пт по вс дача'), ['Дача', '2026-10-23', '2026-10-25', null]);
+  assert.deepEqual(range('со среды по пятницу командировка'), ['Командировка', '2026-10-21', '2026-10-23', null]);
+  assert.deepEqual(range('с 20 по 25 октября отпуск'), ['Отпуск', '2026-10-20', '2026-10-25', null]);
+  assert.deepEqual(range('с 28 октября по 3 ноября поездка'), ['Поездка', '2026-10-28', '2026-11-03', null]);
+  assert.deepEqual(range('с 28 декабря по 3 января каникулы'), ['Каникулы', '2026-12-28', '2027-01-03', null]);
+  assert.deepEqual(range('с 20.10 по 25.10 сессия'), ['Сессия', '2026-10-20', '2026-10-25', null]);
+  // «с 10 до 15 октября» — это даты, а не время 10:00–15:00
+  assert.deepEqual(range('с 20 до 22 октября выставка'), ['Выставка', '2026-10-20', '2026-10-22', null]);
+  assert.equal(range('с 10 до 12 встреча')[3], '10:00');
+
+  const wed = new Date(2026, 9, 21); // среда
+  assert.deepEqual(range('на выходных шашлыки', wed), ['Шашлыки', '2026-10-24', '2026-10-25', null]);
+  assert.deepEqual(range('на следующих выходных поход', wed), ['Поход', '2026-10-31', '2026-11-01', null]);
+  assert.deepEqual(range('всю неделю отпуск', wed), ['Отпуск', '2026-10-21', '2026-10-25', null]);
+  assert.deepEqual(range('всю следующую неделю отпуск', wed), ['Отпуск', '2026-10-26', '2026-11-01', null]);
+  // Повторы не путаются с концом периода
+  assert.equal(c.parseQuick('по пятницам спортзал', wed).repeat, 'weekly');
+
+  const conf = c.parseQuick('конференция на 3 дня с 5 ноября', BASE);
+  assert.equal(conf.title, 'Конференция');
+  assert.equal(conf.spanDays, 3);
+  assert.equal(c.toKey(c.parseQuick('отчёт до конца недели', wed).endDate), '2026-10-25');
+  assert.equal(c.toKey(c.parseQuick('курсовая до конца месяца', wed).endDate), '2026-10-31');
+});
+
+test('многодневные события в календаре', () => {
+  const trip = { id: 'v', title: 'Дача', date: '2026-10-23', endDate: '2026-10-25', repeat: 'none' };
+  const map = c.collect([trip], new Date(2026, 9, 24), new Date(2026, 9, 26));
+  assert.deepEqual(map.get('2026-10-24').map((o) => [o.key, o.index, o.len]), [['2026-10-23', 1, 3]]);
+  assert.deepEqual(map.get('2026-10-25').map((o) => o.index), [2]);
+  assert.equal(map.get('2026-10-26').length, 0);
+  assert.equal(c.spanDays(trip), 3);
+
+  // Каждые выходные: пятница–воскресенье повторяется еженедельно
+  const weekly = { ...trip, repeat: 'weekly', exdates: ['2026-10-30'] };
+  const m2 = c.collect([weekly], new Date(2026, 9, 26), new Date(2026, 10, 8));
+  const days = [...m2].filter(([, l]) => l.length).map(([k]) => k);
+  assert.deepEqual(days, ['2026-11-06', '2026-11-07', '2026-11-08']);
+
+  // .ics: конец «на весь день» — следующий день, и обратно
+  const ev = c.normalizeEvent(trip);
+  assert.match(c.toICS([ev]), /DTEND;VALUE=DATE:20261026/);
+  const [back] = c.fromICS(c.toICS([ev]), () => 'x');
+  assert.equal(back.endDate, '2026-10-25');
+  assert.equal(c.normalizeEvent({ ...trip, endDate: '2026-10-01' }).endDate, null);
 });
 
 test('обычный текст остаётся названием', () => {
