@@ -7,7 +7,7 @@
  * Пересчитывается после каждой отрисовки, при изменении размера окна и прокрутке недели.
  */
 
-/* global state, $, $$, findTask, findEvent, colorOf */
+/* global state, $, $$, findTask, findEvent, colorOf, fitMonthCells */
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 let overlayFrame = 0;
@@ -20,6 +20,7 @@ function scheduleOverlays() {
 function layoutOverlays() {
   const view = $('#view');
   if (!view) return;
+  fitMonthCells(view);
   layoutSpanLabels(view);
   layoutLinks(view);
 }
@@ -36,19 +37,26 @@ function relRect(el, box) {
 function layoutSpanLabels(view) {
   for (const old of $$('.span-label', view)) old.remove();
   for (const box of $$('.month, .tg-allday', view)) {
-    for (const start of $$('[data-seg-start]', box)) {
-      const seg = start.dataset.seg;
-      const end = [...box.querySelectorAll('[data-seg-end]')].find((x) => x.dataset.seg === seg) || start;
-      const a = relRect(start, box);
-      const b = relRect(end, box);
+    // Части полосы, которые видны (лишнее в клетке месяца спрятано под «ещё N»)
+    const segs = new Map();
+    const labels = new Map($$('[data-seg-start]', box).map((x) => [x.dataset.seg, x.dataset.label || '']));
+    for (const el of $$('[data-seg]', box)) {
+      if (el.hidden) continue;
+      const seg = segs.get(el.dataset.seg);
+      if (seg) seg.last = el;
+      else segs.set(el.dataset.seg, { first: el, last: el });
+    }
+    for (const [id, { first, last }] of segs) {
+      const a = relRect(first, box);
+      const b = relRect(last, box);
       const label = document.createElement('div');
-      label.className = 'span-label';
+      label.className = `span-label${first.classList.contains('is-past') ? ' is-past' : ''}`;
       label.style.left = `${a.left}px`;
       label.style.top = `${a.top}px`;
       label.style.width = `${b.left + b.width - a.left}px`;
       label.style.height = `${a.height}px`;
       const text = document.createElement('span');
-      text.textContent = start.dataset.label || '';
+      text.textContent = labels.get(id) || '';
       label.append(text);
       box.append(label);
     }
@@ -62,7 +70,7 @@ function linkTarget(view, task) {
   const ev = findEvent(task.eventId);
   if (!ev) return null;
   const id = `${ev.id}|${ev.repeat === 'none' ? ev.date : (task.eventKey || ev.date)}`;
-  const all = [...view.querySelectorAll('[data-ev]')].filter((x) => x.dataset.ev === id);
+  const all = [...view.querySelectorAll('[data-ev]')].filter((x) => x.dataset.ev === id && !x.hidden);
   return all.find((x) => x.classList.contains('span-head')) || all[0] || null;
 }
 
@@ -86,13 +94,13 @@ function layoutLinks(view) {
   const drawn = new Set();
   for (const from of $$('[data-task]', view)) {
     const task = findTask(from.dataset.task);
-    if (!task || task.done || !task.eventId || drawn.has(task.id)) continue;
+    if (from.hidden || !task || task.done || !task.eventId || drawn.has(task.id)) continue;
     const to = linkTarget(view, task);
     if (!to) continue;
     drawn.add(task.id);
-    // Оба конца в прокручиваемой сетке недели — рисуем внутри неё, чтобы линия прокручивалась вместе
-    const body = from.closest('.tg-body');
-    const box = body && body === to.closest('.tg-body') ? body : view;
+    // Оба конца в прокручиваемой сетке недели или ленте месяца — рисуем внутри неё, чтобы линия прокручивалась вместе
+    const body = from.closest('.tg-body, .month');
+    const box = body && body === to.closest('.tg-body, .month') ? body : view;
     drawLink(layerFor(box), relRect(from, box), relRect(to, box), colorOf(task));
   }
 }

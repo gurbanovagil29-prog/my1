@@ -12,11 +12,13 @@
   <link rel="stylesheet" href="style.css">
   <script src="core.js" defer></script>
   <script src="alarms.js" defer></script>
+  <script src="insights.js" defer></script>
   <script src="config.js" defer></script>
   <script src="sync.js" defer></script>
   <script src="tasks.js" defer></script>
   <script src="reminders-ui.js" defer></script>
   <script src="overlays.js" defer></script>
+  <script src="insights-ui.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -30,6 +32,11 @@
       <button class="btn primary create-btn" id="btnCreate" type="button">
         <span aria-hidden="true">＋</span> Создать
       </button>
+
+      <div class="side-tools">
+        <button class="btn side-tool" id="btnStats" type="button">📊 Статистика</button>
+        <button class="btn side-tool" id="btnSlots" type="button">🔎 Свободное окно</button>
+      </div>
 
       <section class="mini" id="mini" aria-label="Мини-календарь"></section>
 
@@ -48,6 +55,7 @@
         <button class="link-btn" id="btnTheme" type="button"></button>
         <button class="link-btn" id="btnNotify" type="button"></button>
         <button class="link-btn" id="btnQuiet" type="button"></button>
+        <button class="link-btn" id="btnSleep" type="button" title="Время сна и запас между делами — для поиска свободного окна"></button>
         <button class="link-btn" id="btnLinks" type="button"></button>
         <details class="side-more">
           <summary class="link-btn">Данные</summary>
@@ -268,6 +276,68 @@
         <label class="field"><span>С</span><input type="time" id="qFrom" required></label>
         <label class="field"><span>До</span><input type="time" id="qTo" required></label>
       </div>
+      <div class="dialog-foot"><span class="spacer"></span>
+        <button type="button" class="btn" data-close>Отмена</button>
+        <button type="submit" class="btn primary">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="dialog stats-dialog" id="statsDialog">
+    <div class="dialog-head">
+      <h2>Статистика времени</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <div class="stats-top">
+      <div class="segmented" id="statsPeriod" role="tablist">
+        <button type="button" data-period="week">Неделя</button>
+        <button type="button" data-period="month">Месяц</button>
+      </div>
+      <div class="stats-nav">
+        <button type="button" class="icon-btn" id="statsPrev" aria-label="Назад">‹</button>
+        <strong id="statsLabel"></strong>
+        <button type="button" class="icon-btn" id="statsNext" aria-label="Вперёд">›</button>
+      </div>
+    </div>
+    <div id="statsBody"></div>
+    <p class="muted small">Считаются события со временем и блоки «Когда делаю». События на весь день и многодневные (поездки, отпуск) не учитываются, пересечения внутри одной категории считаются один раз.</p>
+  </dialog>
+
+  <dialog class="dialog" id="slotsDialog">
+    <div class="dialog-head">
+      <h2>Свободное окно</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <div class="field-row slot-controls">
+      <label class="field"><span>Сколько нужно</span><select id="sDuration"></select></label>
+      <label class="field"><span>Когда</span><select id="sPeriod"></select></label>
+      <label class="field"><span>Время дня</span><select id="sPart"></select></label>
+    </div>
+    <div class="slot-list" id="slotList"></div>
+    <p class="muted small"><span id="slotHint"></span> <button type="button" class="link-btn inline" id="slotSettingsLink">Настроить</button></p>
+    <p class="muted small">Можно и из строки ввода: «найди 2 часа на этой неделе», «найди 1.5 часа завтра вечером».</p>
+  </dialog>
+
+  <dialog class="dialog" id="slotSettings">
+    <form id="slotSettingsForm" method="dialog">
+      <div class="dialog-head">
+        <h2>Сон и запас времени</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+      </div>
+      <p class="muted">В это время поиск свободного окна ничего не предлагает. По умолчанию сон совпадает с тихими часами напоминаний.</p>
+      <div class="field-row">
+        <label class="field"><span>Ложусь в</span><input type="time" id="sleepFrom" required></label>
+        <label class="field"><span>Встаю в</span><input type="time" id="sleepTo" required></label>
+      </div>
+      <label class="field"><span>Запас до и после других дел</span>
+        <select id="slotBuffer">
+          <option value="0">Без запаса</option>
+          <option value="5">5 минут</option>
+          <option value="10">10 минут</option>
+          <option value="15">15 минут</option>
+          <option value="30">30 минут</option>
+        </select>
+      </label>
       <div class="dialog-foot"><span class="spacer"></span>
         <button type="button" class="btn" data-close>Отмена</button>
         <button type="submit" class="btn primary">Сохранить</button>

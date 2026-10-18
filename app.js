@@ -10,7 +10,7 @@
    refreshAlarms, runLocalAlarms, enableReminders, notifyStatusText, quietLabel, initReminders, initTaskReminderFields,
    setEditorReminds, editorReminds, reminderFromParse, describeReminder, userTz, quietHours, iso,
    plansByDay, planBlock, planChip, movePlan, planLabel, syncLinkedTaskDeadlines, mentionTargets, mentionSlug, normalizePlan, deadlineHint,
-   upcomingOccurrences, scheduleOverlays, initOverlays */
+   upcomingOccurrences, scheduleOverlays, initOverlays, initInsights, openSlots, quickSlotQuery, quickSlotPreview, slotSettingsLabel */
 
 const STORE_KEY = 'everyday-calendar:events';
 const SETTINGS_KEY = 'everyday-calendar:settings';
@@ -227,7 +227,7 @@ function isPast(ev, key) {
 function viewTitle() {
   const c = state.cursor;
   switch (state.view) {
-    case 'month': return `${MONTHS[c.getMonth()]} ${c.getFullYear()}`;
+    case 'month': return `${MONTHS[monthFocus().getMonth()]} ${monthFocus().getFullYear()}`;
     case 'week': {
       const s = startOfWeek(c);
       const e = addDays(s, 6);
@@ -258,8 +258,14 @@ function render() {
 
   const view = $('#view');
   const prevScroll = $('.tg-scroll', view)?.scrollTop;
+  const monthScroller = $('.month-scroll', view);
+  if (monthScroller && monthRange && !monthPrev) monthPrev = { from: monthRange.from, row: monthTopRow };
+  if (state.view !== 'month') state.monthFocus = null;
   view.replaceChildren();
-  if (state.view === 'month') view.append(...renderMonth());
+  if (state.view === 'month') {
+    view.append(...renderMonth());
+    placeMonth();
+  }
   else if (state.view === 'week') view.append(renderTimeGrid(Array.from({ length: 7 }, (_, i) => addDays(startOfWeek(state.cursor), i))));
   else if (state.view === 'day') view.append(renderTimeGrid([state.cursor]));
   else if (state.view === 'agenda') view.append(renderAgenda());
@@ -297,8 +303,13 @@ function setView(v) {
 function go(dir) {
   if (state.view === 'tasks') return;
   const c = state.cursor;
-  if (state.view === 'month') state.cursor = addMonths(c, dir);
-  else if (state.view === 'week') state.cursor = addDays(c, 7 * dir);
+  if (state.view === 'month') {
+    // Листаем от месяца, который сейчас перед глазами; первая строка — неделя с 1-м числом
+    const first = addMonths(firstOfMonth(monthFocus()), dir);
+    state.cursor = sameMonth(first, today()) ? today() : first;
+    state.monthFocus = first;
+    monthScrollTo = first;
+  } else if (state.view === 'week') state.cursor = addDays(c, 7 * dir);
   else if (state.view === 'day') state.cursor = addDays(c, dir);
   else state.cursor = addDays(c, 14 * dir);
   state.mini = state.cursor;
@@ -308,8 +319,12 @@ function go(dir) {
 function visibleRange() {
   const c = state.cursor;
   if (state.view === 'month') {
-    const first = new Date(c.getFullYear(), c.getMonth(), 1);
-    return [first, new Date(c.getFullYear(), c.getMonth() + 1, 0)];
+    const scroller = $('#view .month-scroll');
+    if (!scroller || !monthRange) return [c, c];
+    const rowH = monthRowHeight(scroller.firstElementChild);
+    const top = Math.ceil(scroller.scrollTop / rowH - 0.05);
+    const rows = Math.max(1, Math.floor(scroller.clientHeight / rowH + 0.05));
+    return [addDays(monthRange.from, top * 7), addDays(monthRange.from, (top + rows) * 7 - 1)];
   }
   if (state.view === 'week') return [startOfWeek(c), addDays(startOfWeek(c), 6)];
   if (state.view === 'day') return [c, c];
@@ -319,6 +334,7 @@ function visibleRange() {
 function goToday() {
   state.cursor = today();
   state.mini = today();
+  monthScrollTo = today();
   state.autoScroll = true;
   render();
 }
@@ -326,6 +342,7 @@ function goToday() {
 function selectDay(d, view) {
   state.cursor = d;
   state.mini = d;
+  monthReveal = d;
   if (view) setView(view);
   else render();
 }
@@ -336,34 +353,53 @@ function dayTaskItems(key, plans, deadlines) {
   return { planned, due: (deadlines.get(key) || []).filter((t) => !planned.includes(t)) };
 }
 
-/* ---------- Месяц ---------- */
+/* ---------- Месяц: лента недель ---------- */
+
+// Месяц — непрерывная лента недель: на телефоне видно 3 недели, листается вверх-вниз.
+// Рисуем полгода до и после; ближе к краю ленты она дорисовывается.
+const MONTH_PAD_WEEKS = 26;
+let monthRange = null; // { from: понедельник первой строки, weeks }
+let monthScrollTo = null; // день, неделю которого поставить первой строкой
+let monthReveal = null; // день, который должен оказаться на экране (если его не видно)
+let monthPrev = null; // положение ленты до перерисовки
+let monthTopRow = 0; // какая неделя ленты сейчас первой строкой (дробное — если прокручено не до границы)
+
+const monthEnd = (r) => addDays(r.from, r.weeks * 7 - 1);
+const firstOfMonth = (d) => new Date(d.getFullYear(), d.getMonth(), 1);
+const monthFocus = () => state.monthFocus || state.cursor;
+
+function monthRangeFor(d) {
+  return { from: addDays(startOfWeek(firstOfMonth(d)), -7 * MONTH_PAD_WEEKS), weeks: MONTH_PAD_WEEKS * 2 + 6 };
+}
 
 function renderMonth() {
-  const c = state.cursor;
-  const first = new Date(c.getFullYear(), c.getMonth(), 1);
-  const start = startOfWeek(first);
-  const weeks = Math.ceil((wdIndex(first) + new Date(c.getFullYear(), c.getMonth() + 1, 0).getDate()) / 7);
-  const end = addDays(start, weeks * 7 - 1);
+  const anchor = monthScrollTo || monthReveal;
+  if (!monthRange || (anchor && (anchor < addDays(monthRange.from, 21) || anchor > addDays(monthEnd(monthRange), -21)))) {
+    monthRange = monthRangeFor(anchor || state.cursor);
+    monthPrev = null;
+  }
+  const start = monthRange.from;
+  const end = monthEnd(monthRange);
   const map = collect(visibleEvents(), start, end);
   const tasks = tasksByDay(start, end, { standalone: true });
   const plans = plansByDay(start, end);
   const t = today();
+  const focus = monthFocus();
   const lanesByDay = new Map();
-  for (let w = 0; w < weeks; w++) {
+  for (let w = 0; w < monthRange.weeks; w++) {
     const days = Array.from({ length: 7 }, (_, i) => addDays(start, w * 7 + i));
     spanLanes(days, map, `w${w}`).forEach((slots, i) => lanesByDay.set(toKey(days[i]), slots));
   }
 
-  const grid = h('div', { class: 'month', style: { gridTemplateRows: `auto repeat(${weeks}, minmax(0, 1fr))` } },
-    WD_SHORT.map((w) => h('div', { class: 'month-wd' }, w)));
-
+  const grid = h('div', { class: 'month' });
   for (let d = start; d <= end; d = addDays(d, 1)) {
     const day = d;
     const key = toKey(day);
     const list = map.get(key);
     const cls = ['cell'];
-    if (day.getMonth() !== c.getMonth()) cls.push('is-other');
+    if (day.getMonth() !== focus.getMonth() || day.getFullYear() !== focus.getFullYear()) cls.push('is-other');
     if (sameDay(day, t)) cls.push('is-today');
+    else if (day < t) cls.push('is-past-day');
     if (sameDay(day, state.cursor)) cls.push('is-selected');
     if (wdIndex(day) >= 5) cls.push('is-weekend');
 
@@ -382,31 +418,144 @@ function renderMonth() {
         onclick: (e) => { e.stopPropagation(); openEditor({ preset: { date: key } }); },
       }, '+')));
 
-    // Сначала дорожки многодневных событий (пустые — распорки, чтобы полосы шли ровно), потом остальное
+    // Сначала дорожки многодневных событий (пустые — распорки, чтобы полосы шли ровно), потом остальное.
+    // Что не влезает по высоте, прячет fitMonthCells и пишет «ещё N».
     const slots = lanesByDay.get(key);
-    const lastLane = slots.findLastIndex(Boolean);
     const { planned, due } = dayTaskItems(key, plans, tasks);
-    const items = [
-      ...slots.slice(0, lastLane + 1).map((s) => (s ? () => spanChip(s) : () => h('div', { class: 'chip-spacer' }))),
-      ...list.filter((o) => o.len === 1).map((o) => () => chip(o)),
-      ...planned.map((task) => () => planChip(task)),
-      ...due.map((task) => () => taskChip(task)),
-    ];
-    const limit = 3;
-    const shown = items.length > limit + 1 ? items.slice(0, limit) : items;
-    for (const make of shown) cell.append(make());
-    const hidden = list.length + planned.length + due.length - cell.querySelectorAll('.chip').length;
-    if (hidden > 0) {
-      cell.append(h('button', {
+    cell.append(
+      ...slots.slice(0, slots.findLastIndex(Boolean) + 1).map((s) => (s ? spanChip(s) : h('div', { class: 'chip-spacer' }))),
+      ...list.filter((o) => o.len === 1).map((o) => chip(o)),
+      ...planned.map((task) => planChip(task)),
+      ...due.map((task) => taskChip(task)),
+      h('button', {
         class: 'more',
         type: 'button',
+        hidden: true,
         onclick: (e) => { e.stopPropagation(); selectDay(day, 'day'); },
-      }, `ещё ${hidden}`));
-    }
+      }),
+    );
     dropTarget(cell, key, 'date');
     grid.append(cell);
   }
-  return [grid, renderDayPanel(state.cursor)];
+  const scroller = h('div', { class: 'month-scroll', onscroll: onMonthScroll }, grid);
+  return [
+    h('div', { class: 'month-wrap' }, h('div', { class: 'month-head' }, WD_SHORT.map((w) => h('div', { class: 'month-wd' }, w))), scroller),
+    renderDayPanel(state.cursor),
+  ];
+}
+
+const monthRowHeight = (grid) => {
+  const cells = grid.children;
+  return cells.length > 7 ? cells[7].offsetTop - cells[0].offsetTop : 1;
+};
+
+/** После отрисовки: ставит ленту на нужную неделю или туда же, где она была. */
+function placeMonth() {
+  const scroller = $('#view .month-scroll');
+  if (!scroller) return;
+  const grid = scroller.firstElementChild;
+  const rowH = monthRowHeight(grid);
+  const rowOf = (d) => Math.floor(dayDiff(monthRange.from, d) / 7);
+  const rows = Math.round(scroller.clientHeight / rowH) || 1;
+  let target = monthScrollTo;
+  if (!target && !monthPrev) target = sameMonth(state.cursor, today()) ? today() : firstOfMonth(state.cursor);
+  // Сегодня — на телефоне (3 недели) первой строкой, чтобы впереди было будущее;
+  // на большом экране месяц показывается с 1-го числа, если сегодняшняя неделя при этом видна
+  if (target && sameDay(target, today()) && rowOf(target) - rowOf(firstOfMonth(target)) < rows - 1 && rows > 3) target = firstOfMonth(target);
+  if (target) scroller.scrollTop = rowOf(target) * rowH;
+  else scroller.scrollTop = (monthPrev.row + dayDiff(monthRange.from, monthPrev.from) / 7) * rowH;
+  if (monthReveal) {
+    const row = rowOf(monthReveal);
+    const top = scroller.scrollTop / rowH;
+    const shown = scroller.clientHeight / rowH;
+    if (row < Math.floor(top) || row + 1 > top + shown + 0.01) scroller.scrollTop = row * rowH;
+  }
+  monthScrollTo = null;
+  monthReveal = null;
+  monthPrev = null;
+  monthTopRow = scroller.scrollTop / rowH;
+  updateMonthFocus(scroller);
+  // Высота ленты меняется (панель дня, клавиатура, поворот) — строки тоже, а первой остаётся та же неделя
+  monthResize.disconnect();
+  monthResize.observe(scroller);
+}
+
+const monthResize = new ResizeObserver((entries) => {
+  for (const { target } of entries) {
+    if (!target.isConnected) continue;
+    target.scrollTop = monthTopRow * monthRowHeight(target.firstElementChild);
+  }
+});
+
+const sameMonth = (a, b) => a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear();
+
+/** Какой месяц сейчас перед глазами: по середине видимой части ленты. Он — в заголовке, остальные дни бледнее. */
+function updateMonthFocus(scroller) {
+  const grid = scroller.firstElementChild;
+  const rowH = monthRowHeight(grid);
+  const row = Math.floor((scroller.scrollTop + scroller.clientHeight / 2) / rowH);
+  const mid = addDays(monthRange.from, row * 7 + 3);
+  const focus = firstOfMonth(mid);
+  if (state.monthFocus && sameMonth(state.monthFocus, focus)) return;
+  state.monthFocus = focus;
+  const prefix = toKey(focus).slice(0, 7);
+  for (const cell of grid.children) {
+    if (cell.dataset.date) cell.classList.toggle('is-other', !cell.dataset.date.startsWith(prefix));
+  }
+  $('#title').textContent = viewTitle();
+  document.title = `${capitalize(viewTitle())} — Календарь`;
+}
+
+let monthScrollFrame = 0;
+function onMonthScroll(e) {
+  const scroller = e.currentTarget;
+  cancelAnimationFrame(monthScrollFrame);
+  monthScrollFrame = requestAnimationFrame(() => {
+    if (!scroller.isConnected) return;
+    const rowH = monthRowHeight(scroller.firstElementChild);
+    monthTopRow = scroller.scrollTop / rowH;
+    updateMonthFocus(scroller);
+    // Подошли к краю ленты — дорисовываем ещё полгода
+    if (scroller.scrollTop < rowH * 3) {
+      monthRange = { from: addDays(monthRange.from, -7 * MONTH_PAD_WEEKS), weeks: monthRange.weeks + MONTH_PAD_WEEKS };
+      render();
+    } else if (scroller.scrollTop + scroller.clientHeight > scroller.scrollHeight - rowH * 3) {
+      monthRange = { ...monthRange, weeks: monthRange.weeks + MONTH_PAD_WEEKS };
+      render();
+    }
+  });
+}
+
+/** Прячет в клетках месяца то, что не влезает по высоте, и пишет «ещё N». */
+function fitMonthCells(view) {
+  const cells = $$('.month .cell', view);
+  if (!cells.length) return;
+  const moreH = parseFloat(getComputedStyle(cells[0].parentElement).getPropertyValue('--more-h')) || 16;
+  const rows = cells.map((cell) => {
+    const items = [...cell.children].filter((x) => x.classList.contains('chip') || x.classList.contains('chip-spacer'));
+    for (const x of items) x.hidden = false;
+    const more = cell.lastElementChild;
+    more.hidden = true;
+    return { cell, items, more };
+  });
+  // Сначала все замеры, потом все изменения — чтобы браузер не пересчитывал раскладку на каждой клетке
+  const cuts = rows.map(({ cell, items }) => {
+    if (!items.length) return -1;
+    const limit = cell.clientHeight - 2;
+    const bottom = (x) => x.offsetTop + x.offsetHeight;
+    if (bottom(items[items.length - 1]) <= limit) return -1;
+    return Math.max(0, items.findIndex((x) => bottom(x) > limit - moreH - 2));
+  });
+  rows.forEach(({ items, more }, i) => {
+    if (cuts[i] < 0) return;
+    const hidden = items.slice(cuts[i]);
+    for (const x of hidden) x.hidden = true;
+    const n = hidden.filter((x) => x.classList.contains('chip')).length;
+    if (n) {
+      more.hidden = false;
+      more.textContent = `ещё ${n}`;
+    }
+  });
 }
 
 /** Список событий выбранного дня под месяцем — виден на телефоне. */
@@ -521,7 +670,7 @@ function renderTimeGrid(days) {
 
   const head = h('div', { class: 'tg-row tg-head' }, h('div'),
     days.map((d) => h('button', {
-      class: `tg-day${sameDay(d, t) ? ' is-today' : ''}`,
+      class: `tg-day${sameDay(d, t) ? ' is-today' : ''}${d < t ? ' is-past-day' : ''}`,
       type: 'button',
       onclick: () => selectDay(d, 'day'),
     }, h('span', { class: 'tg-wd' }, WD_SHORT[wdIndex(d)]), h('span', { class: 'tg-num' }, d.getDate()))));
@@ -530,7 +679,7 @@ function renderTimeGrid(days) {
   const allDay = h('div', { class: 'tg-row tg-allday' }, h('div', { class: 'tg-allday-label' }, 'весь день'),
     days.map((d, i) => {
       const key = toKey(d);
-      const cell = h('div', { class: 'tg-allday-cell' });
+      const cell = h('div', { class: `tg-allday-cell${d < t ? ' is-past-day' : ''}` });
       cell.addEventListener('click', (e) => {
         if (e.target === cell) openEditor({ preset: { date: key, allDay: true } });
       });
@@ -568,7 +717,15 @@ function dayColumn(d, items, isToday, timedTasks, timedPlans = []) {
     ...items.map((o) => ({ ...o, s: toMin(o.ev.start), e: endMinutes(o.ev) })),
     ...timedPlans.map((task) => ({ task, s: toMin(task.plan.start), e: task.plan.end ? toMin(task.plan.end) : Math.min(toMin(task.plan.start) + 60, 1440) })),
   ]);
-  for (const it of laid) col.append(it.task ? planBlock(it) : eventBlock(it));
+  // Прошедшее время — серым фоном: в прошлые дни вся колонка, сегодня — до линии «сейчас»
+  const past = d < today();
+  if (past || isToday) col.append(h('div', { class: 'past-shade', style: { height: past ? '100%' : `${nowTop()}px` } }));
+  const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+  for (const it of laid) {
+    const el = it.task ? planBlock(it) : eventBlock(it);
+    if (it.task && (past || (isToday && it.e <= nowMin))) el.classList.add('is-past');
+    col.append(el);
+  }
   for (const task of timedTasks) col.append(deadlineMarker(task));
   if (isToday) col.append(h('div', { class: 'now-line', style: { top: `${nowTop()}px` } }));
   return col;
@@ -895,6 +1052,7 @@ function renderFooter() {
   $('#btnTheme').textContent = `Тема: ${{ auto: 'как в системе', light: 'светлая', dark: 'тёмная' }[theme]}`;
   $('#btnNotify').textContent = notifyStatusText();
   $('#btnQuiet').textContent = quietLabel();
+  $('#btnSleep').textContent = slotSettingsLabel();
   $('#btnLinks').textContent = `🔗 Линии связей: ${state.settings.links === false ? 'выкл' : 'вкл'}`;
 }
 
@@ -1192,6 +1350,12 @@ const quickIsTask = (r = null) => {
 const quickPicks = new Map();
 
 function renderQuickMode() {
+  if (quickSlotQuery(quickInput.value)) {
+    $('#quickMode').replaceChildren(h('span', {}, '🔎'), h('span', { class: 'quick-mode-label' }, ' Окно'));
+    $('#quickMode').setAttribute('aria-label', 'Поиск свободного окна');
+    $('#quickMode').classList.remove('is-task');
+    return;
+  }
   const task = quickIsTask();
   $('#quickMode').replaceChildren(h('span', {}, task ? '☑' : '⚡'), h('span', { class: 'quick-mode-label' }, task ? ' Задача' : ' Событие'));
   $('#quickMode').setAttribute('aria-label', task ? 'Режим: задача' : 'Режим: событие');
@@ -1248,6 +1412,8 @@ function quickDateLabel(r) {
 function updateQuickPreview() {
   const preview = $('#quickPreview');
   if (!quickInput.value.trim()) { preview.textContent = ''; return; }
+  const slotQ = quickSlotQuery(quickInput.value);
+  if (slotQ) { preview.textContent = quickSlotPreview(slotQ); return; }
   const r = quickParse();
   // Задача к событию без #метки попадает в календарь самого события
   const cal = r.cal || (r.link ? calOf(r.link.ev) : state.calendars.find((c) => c.id === defaultCal()));
@@ -1379,6 +1545,7 @@ quickInput.addEventListener('keydown', (e) => {
   if (e.key === 'Tab' && !quickInput.value) { e.preventDefault(); toggleQuickMode(); }
   if (e.key === 'Enter' && e.shiftKey) {
     e.preventDefault();
+    if (submitSlotQuery()) return;
     const r = quickParse();
     if (quickIsTask(r)) {
       const { plan, deadline: dl } = quickTaskParts(r);
@@ -1396,6 +1563,7 @@ quickInput.addEventListener('keydown', (e) => {
 $('#quickForm').addEventListener('submit', (e) => {
   e.preventDefault();
   if (!quickInput.value.trim()) return;
+  if (submitSlotQuery()) return;
   const r = quickParse();
   if (quickIsTask(r)) {
     addQuickTask(r);
@@ -1425,11 +1593,24 @@ $('#quickForm').addEventListener('submit', (e) => {
     if (r.date < from || r.date > to) {
       state.cursor = r.date;
       state.mini = r.date;
+      monthReveal = r.date;
     }
   });
   quickInput.value = '';
   updateQuickPreview();
 });
+
+/** «найди 2 часа на этой неделе» — открывает подбор свободного окна. */
+function submitSlotQuery() {
+  const q = quickSlotQuery(quickInput.value);
+  if (!q) return false;
+  quickInput.value = '';
+  renderQuickMode();
+  updateQuickPreview();
+  quickInput.blur();
+  openSlots(q);
+  return true;
+}
 
 function addQuickTask(r) {
   if (r.mention && !r.link) {
@@ -1715,6 +1896,7 @@ setInterval(() => {
     render();
   } else {
     for (const line of $$('.now-line')) line.style.top = `${nowTop()}px`;
+    for (const shade of $$('.tg-col.is-today .past-shade')) shade.style.height = `${nowTop()}px`;
     renderSideList();
     const badge = taskBadgeCount();
     $('#taskBadge').hidden = !badge;
@@ -1752,6 +1934,7 @@ if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
 initTasks();
 initTaskReminderFields();
 initOverlays();
+initInsights();
 render();
 initReminders();
 runLocalAlarms();

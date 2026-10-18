@@ -353,7 +353,27 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 }
 
 /* ---------- Месяц ---------- */
-.month { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); grid-template-rows: auto; grid-auto-rows: minmax(0, 1fr); flex: 1; min-height: 0; }
+.month-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.month-head { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); overflow: hidden; scrollbar-gutter: stable; }
+/* Лента недель: высота строки — доля видимой области (--month-rows недель на экране) */
+.month-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-snap-type: y proximity;
+  scrollbar-gutter: stable;
+  container-type: size;
+}
+.month {
+  --month-rows: 5;
+  --more-h: 18px;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-auto-rows: 120px;
+  grid-auto-rows: calc(100cqh / var(--month-rows));
+}
+.month > .cell:nth-child(7n + 1) { scroll-snap-align: start; }
 .month-wd { padding: 8px 10px; font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid var(--line); }
 .cell {
   position: relative;
@@ -370,6 +390,9 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .cell:nth-child(7n) { border-right: 0; }
 .cell.is-weekend { background: var(--weekend); }
 .cell.is-other .cell-num { color: var(--muted); opacity: .6; }
+/* Прошедшие дни бледнее, чтобы взгляд шёл к будущему; несделанные просроченные задачи остаются яркими */
+.cell.is-past-day { background: color-mix(in srgb, var(--text) 3.5%, var(--surface)); }
+.cell.is-past-day .cell-num, .cell.is-past-day > .chip:not(.is-overdue), .cell.is-past-day > .more { opacity: .45; }
 .cell:hover { background: var(--surface-2); }
 .cell.is-selected { box-shadow: inset 0 0 0 2px var(--accent); }
 .cell-head { display: flex; align-items: center; justify-content: space-between; padding: 0 2px 2px; }
@@ -388,7 +411,7 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   transition: opacity .1s;
 }
 .cell:hover .cell-add, .cell.is-selected .cell-add { opacity: 1; }
-.more { border: 0; background: none; color: var(--muted); font-size: 12px; text-align: left; padding: 1px 6px; border-radius: 6px; }
+.more { flex: none; height: var(--more-h); border: 0; background: none; color: var(--muted); font-size: 12px; line-height: 1; text-align: left; padding: 0 6px; border-radius: 6px; }
 .more:hover { background: var(--line); color: var(--text); }
 
 .chip {
@@ -411,6 +434,18 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .chip.is-allday::before { display: none; }
 .chip.is-allday:hover { background: color-mix(in srgb, var(--c) 28%, var(--surface)); }
 .chip, .chip-spacer { flex: none; height: 20px; }
+/* В клетке месяца название переносится на вторую строку, а не обрезается */
+.cell > .chip:not(.is-span) { height: auto; min-height: 20px; align-items: flex-start; }
+.cell > .chip:not(.is-span) .chip-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: break-word;
+  -webkit-hyphens: auto;
+  hyphens: auto;
+}
+.cell > .chip:not(.is-span)::before { margin-top: 5px; }
 .chip.is-span {
   margin: 0 -5px;
   padding-left: 9px;
@@ -498,6 +533,12 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .tg-ev.is-short .tg-ev-time { white-space: nowrap; }
 .tg-resize { position: absolute; left: 0; right: 0; bottom: 0; height: 7px; cursor: ns-resize; }
 .tg-ev.is-past, .chip.is-past { opacity: .55; }
+
+.past-shade { position: absolute; left: 0; right: 0; top: 0; z-index: 0; pointer-events: none; background: color-mix(in srgb, var(--text) 5%, transparent); }
+.tg-day.is-past-day .tg-wd, .tg-day.is-past-day .tg-num { opacity: .5; }
+.tg-allday-cell.is-past-day { background: color-mix(in srgb, var(--text) 3.5%, transparent); }
+.tg-allday-cell.is-past-day > .chip:not(.is-overdue) { opacity: .45; }
+.span-label.is-past { opacity: .5; }
 
 .now-line {
   position: absolute;
@@ -1119,6 +1160,9 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: va
   .cell-add { display: none; }
   .chip { padding: 0 3px; font-size: 10px; border-radius: 4px; background: color-mix(in srgb, var(--c) 22%, transparent); }
   .chip, .chip-spacer { height: 15px; }
+  .month { --month-rows: 3; --more-h: 14px; }
+  .cell > .chip:not(.is-span) { min-height: 15px; padding: 1px 3px; }
+  .cell > .chip:not(.is-span) .chip-title { line-height: 1.2; }
   .chip.is-span { margin: 0 -3px; padding-left: 4px; }
   .chip.is-span.span-head { padding-left: 4px; }
   .span-label { font-size: 10px; padding: 0 3px; }
@@ -1134,7 +1178,7 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: va
   .quick-mode-label { display: none; }
   .quick input::placeholder { font-size: 14px; }
   .chip-title { text-overflow: clip; }
-  .more { font-size: 10px; padding: 0 3px; }
+  .more { font-size: 10px; padding: 0 3px; text-align: center; }
   .day-panel {
     display: block;
     flex: 0 0 auto;
@@ -1161,3 +1205,57 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: va
 .forgot-btn { width: auto; margin-top: 4px; padding: 4px 0; font-size: 13px; }
 .sync-notice { padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, #30a46c 14%, transparent); }
 .sync-form .sync-error { margin: 8px 0 0; }
+
+/* ---------- Статистика и свободное окно ---------- */
+.side-tools { display: flex; flex-direction: column; gap: 6px; }
+.side-tool { justify-content: flex-start; padding: 8px 12px; font-size: 14px; text-align: left; }
+.muted.small { font-size: 12px; margin: 12px 0 0; }
+.link-btn.inline { display: inline; width: auto; padding: 0 2px; color: var(--accent); text-decoration: underline; }
+
+.stats-dialog { width: min(560px, calc(100vw - 24px)); }
+.stats-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 14px 0; flex-wrap: wrap; }
+.stats-nav { display: flex; align-items: center; gap: 4px; }
+.stats-nav strong { min-width: 130px; text-align: center; }
+.stats-total { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.stats-total strong { font-size: 24px; }
+.stats-total .muted { font-size: 13px; }
+.stats-stack { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--surface-2); margin-bottom: 12px; }
+.stats-stack > div { background: var(--c); }
+.stats-stack > div + div { box-shadow: inset 2px 0 0 var(--surface); }
+.stats-rows { display: flex; flex-direction: column; gap: 2px; }
+.stats-row { display: grid; grid-template-columns: 12px 1fr auto 44px 100px; align-items: center; gap: 8px; padding: 6px 4px; border-radius: 8px; }
+.stats-row.is-zero { color: var(--muted); }
+.stats-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
+.stats-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stats-hours { font-variant-numeric: tabular-nums; font-weight: 600; }
+.stats-row.is-zero .stats-hours { font-weight: 400; }
+.stats-share { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.stats-delta { font-size: 12px; text-align: right; white-space: nowrap; color: var(--muted); }
+.stats-delta.is-up { color: #30a46c; }
+.stats-delta.is-down { color: var(--danger); }
+.stats-note { margin: 10px 4px 0; font-size: 13px; }
+.stats-days { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; height: 150px; margin-top: 14px; padding-top: 6px; border-top: 1px solid var(--line); }
+.stats-days.is-month { gap: 2px; }
+.stats-day { display: flex; flex-direction: column; min-width: 0; }
+.stats-col { flex: 1; display: flex; flex-direction: column-reverse; border-radius: 6px 6px 0 0; overflow: hidden; background: var(--surface-2); }
+.stats-days.is-month .stats-col { border-radius: 3px 3px 0 0; }
+.stats-seg { background: var(--c); flex: none; }
+.stats-day-label { height: 18px; padding-top: 3px; font-size: 11px; color: var(--muted); text-align: center; white-space: nowrap; }
+.stats-day.is-today .stats-day-label { color: var(--accent); font-weight: 700; }
+
+.slot-controls .field { flex: 1 1 120px; }
+.slot-list { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+.slot { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; }
+.slot-when { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; }
+.slot-when span { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--accent); }
+.slot-when small { flex-basis: 100%; color: var(--muted); }
+.slot .btn { padding: 6px 10px; font-size: 13px; white-space: nowrap; }
+
+@media (max-width: 520px) {
+  .stats-row { grid-template-columns: 12px 1fr auto 38px; }
+  .stats-row .stats-delta { grid-column: 2 / -1; text-align: left; margin-top: -4px; }
+  .stats-row .stats-delta:empty { display: none; }
+  .slot { flex-wrap: wrap; }
+  .slot-when { flex-basis: 100%; }
+  .slot .btn { flex: 1; }
+}
