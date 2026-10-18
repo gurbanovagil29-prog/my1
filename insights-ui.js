@@ -7,7 +7,7 @@
 
 /* global state, $, h, toKey, fromKey, addDays, addMonths, startOfWeek, today, sameDay, wdIndex, fromMin,
    WD_SHORT, MONTHS, MONTHS_GEN, calOf, timeStats, findFreeSlots, parseSlotQuery, quietHours, saveSettings,
-   formatDate, shortDate, relativeDay, capitalize, openEditor, openTaskEditor, closeNav, toast */
+   formatDate, shortDate, relativeDay, capitalize, openEditor, openTaskEditor, closeNav, toast, findLayer, layerByName */
 
 /* ---------- Статистика ---------- */
 
@@ -167,8 +167,9 @@ function openSlots(query = null) {
     });
     slotQuery = { ...query, periodId: known || 'custom', custom: known ? null : rangeLabel(query.from, query.to) };
   } else if (!slotQuery) {
-    slotQuery = { duration: 60, periodId: 'next7', window: null };
+    slotQuery = { duration: 60, periodId: 'next7', window: null, with: null };
   }
+  if (slotQuery.with && !findLayer(slotQuery.with)) slotQuery.with = null;
   renderSlotControls();
   renderSlots();
   $('#slotsDialog').showModal();
@@ -185,6 +186,11 @@ function renderSlotControls() {
   $('#sPart').replaceChildren(
     ...(partId ? [] : [h('option', { value: 'custom', selected: true }, `${fromMin(q.window[0])}–${fromMin(q.window[1])}`)]),
     ...Object.entries(DAY_PARTS_UI).map(([id, [label]]) => h('option', { value: id, selected: id === partId }, label)));
+  // Совместный поиск: календари друзей, которые вам видны
+  const layers = (state.layers || []).filter((l) => !l.error);
+  $('#sWithWrap').hidden = !layers.length;
+  $('#sWith').replaceChildren(h('option', { value: '' }, 'Только я'),
+    ...layers.map((l) => h('option', { value: l.key, selected: l.key === q.with }, `Я и ${l.name}`)));
 }
 
 function renderSlots() {
@@ -193,8 +199,10 @@ function renderSlots() {
   const keys = [];
   for (let d = from; d <= to; d = addDays(d, 1)) keys.push(toKey(d));
   const n = new Date();
+  // С другом — его занятое время тоже занято (его события и блоки «Когда делаю»)
+  const friend = q.with ? findLayer(q.with) : null;
   const slots = findFreeSlots({
-    events: state.events,
+    events: friend ? [...state.events, ...friend.events] : state.events,
     tasks: state.tasks,
     keys,
     duration: q.duration,
@@ -224,7 +232,7 @@ function renderSlots() {
       }, '☑ Задача'));
   }) : [h('div', { class: 'side-empty' }, `Нет свободных ${fmtDuration(q.duration)} подряд в этот период. Попробуйте другой период или меньше времени.`)]));
   const sleep = slotSleep();
-  $('#slotHint').textContent = `Не предлагаю время сна (${sleep[0]}–${sleep[1]}) и оставляю ${slotBuffer()} мин до и после других дел.`;
+  $('#slotHint').textContent = `${friend ? `Время, когда свободны вы и ${friend.name}. ` : ''}Не предлагаю время сна (${sleep[0]}–${sleep[1]}) и оставляю ${slotBuffer()} мин до и после других дел.`;
 }
 
 /* ---------- Настройки поиска окна ---------- */
@@ -249,6 +257,7 @@ function initSlots() {
     slotQuery.periodId = e.target.value;
     renderSlots();
   });
+  $('#sWith').addEventListener('change', (e) => { slotQuery.with = e.target.value || null; renderSlots(); });
   $('#sPart').addEventListener('change', (e) => {
     if (e.target.value === 'custom') return;
     slotQuery.window = DAY_PARTS_UI[e.target.value][1];
@@ -270,14 +279,19 @@ function initSlots() {
 /** Быстрая строка: «найди 2 часа на этой неделе» — запрос на поиск окна или null. */
 function quickSlotQuery(text) {
   const q = parseSlotQuery(text, today());
-  return q && { ...q, window: q.window && [Math.max(0, q.window[0]), Math.min(1440, q.window[1])] };
+  if (!q) return null;
+  // «найди 2 часа с Аней» — общее окно с другом, чей календарь вам виден
+  let friend = null;
+  for (const m of String(text).matchAll(/(?:^|\s)со? ([А-Яа-яЁёA-Za-z-]{2,})/g)) friend ||= layerByName(m[1]);
+  return { ...q, with: friend?.key || null, window: q.window && [Math.max(0, q.window[0]), Math.min(1440, q.window[1])] };
 }
 
 function quickSlotPreview(q) {
   const part = Object.values(DAY_PARTS_UI).find(([, w]) => JSON.stringify(w) === JSON.stringify(q.window));
   const when = q.period ? q.period : rangeLabel(q.from, q.to).toLowerCase();
   const time = q.window ? (part ? part[0].toLowerCase() : `${fromMin(q.window[0])}–${fromMin(q.window[1])}`) : '';
-  return `🔎 Найти свободные ${fmtDuration(q.duration)} · ${[when, time].filter(Boolean).join(', ')} · Enter — показать`;
+  const friend = q.with ? findLayer(q.with) : null;
+  return `🔎 Найти свободные ${fmtDuration(q.duration)}${friend ? ` (вы и ${friend.name})` : ''} · ${[when, time].filter(Boolean).join(', ')} · Enter — показать`;
 }
 
 function initInsights() {

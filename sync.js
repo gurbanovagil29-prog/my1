@@ -294,6 +294,8 @@ async function initSync() {
     setSyncStatus('error', err);
     return;
   }
+  // Календари по ссылкам друзей открываются и без входа в аккаунт
+  if (typeof onSyncClient === 'function') setTimeout(onSyncClient, 0);
 
   sync.client.auth.onAuthStateChange((event, session) => {
     if (event === 'PASSWORD_RECOVERY') {
@@ -310,11 +312,13 @@ async function initSync() {
         startEngine();
         // Подписка этого устройства на push (часовой пояс, ключ сервера)
         if (typeof onSyncUser === 'function') onSyncUser();
+        if (typeof onFriendsUser === 'function') onFriendsUser();
       }, 0);
       if (event === 'SIGNED_IN') toast(`Вы вошли: ${user.email || 'аккаунт'}. Данные синхронизируются`);
     } else {
       stopEngine();
       setSyncStatus('signed-out');
+      if (typeof onFriendsUser === 'function') setTimeout(onFriendsUser, 0);
     }
     renderSyncDialog();
   });

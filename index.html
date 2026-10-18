@@ -13,12 +13,14 @@
   <script src="core.js" defer></script>
   <script src="alarms.js" defer></script>
   <script src="insights.js" defer></script>
+  <script src="sharing.js" defer></script>
   <script src="config.js" defer></script>
   <script src="sync.js" defer></script>
   <script src="tasks.js" defer></script>
   <script src="reminders-ui.js" defer></script>
   <script src="overlays.js" defer></script>
   <script src="insights-ui.js" defer></script>
+  <script src="friends.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -48,10 +50,19 @@
         <div id="calList"></div>
       </section>
 
+      <section class="cals friends" id="friendsSection" aria-labelledby="friendsTitle" hidden>
+        <div class="cals-head">
+          <h3 id="friendsTitle">Друзья</h3>
+          <button class="icon-btn small" id="btnShare" type="button" title="Поделиться своим календарём" aria-label="Поделиться своим календарём">＋</button>
+        </div>
+        <div id="friendList"></div>
+      </section>
+
       <section class="side-list" id="sideList" aria-label="Ближайшие события"></section>
 
       <footer class="side-footer">
         <button class="link-btn" id="btnSyncSide" type="button">☁︎ Синхронизация</button>
+        <button class="link-btn" id="btnShareSide" type="button">👥 Поделиться календарём</button>
         <button class="link-btn" id="btnTheme" type="button"></button>
         <button class="link-btn" id="btnNotify" type="button"></button>
         <button class="link-btn" id="btnPushTest" type="button">🧪 Проверить push</button>
@@ -313,10 +324,11 @@
       <label class="field"><span>Сколько нужно</span><select id="sDuration"></select></label>
       <label class="field"><span>Когда</span><select id="sPeriod"></select></label>
       <label class="field"><span>Время дня</span><select id="sPart"></select></label>
+      <label class="field" id="sWithWrap" hidden><span>С кем</span><select id="sWith"></select></label>
     </div>
     <div class="slot-list" id="slotList"></div>
     <p class="muted small"><span id="slotHint"></span> <button type="button" class="link-btn inline" id="slotSettingsLink">Настроить</button></p>
-    <p class="muted small">Можно и из строки ввода: «найди 2 часа на этой неделе», «найди 1.5 часа завтра вечером».</p>
+    <p class="muted small">Можно и из строки ввода: «найди 2 часа на этой неделе», «найди 1.5 часа завтра вечером», «найди 2 часа с Аней».</p>
   </dialog>
 
   <dialog class="dialog" id="slotSettings">
@@ -344,6 +356,57 @@
         <button type="submit" class="btn primary">Сохранить</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog class="dialog" id="shareDialog">
+    <div class="dialog-head">
+      <h2>Кто видит мой календарь</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <p class="muted">Друзья видят ваш календарь только для просмотра. Что именно видно — настраивается для каждого: по категориям, задачам и заметкам.</p>
+    <label class="field"><span>Как вас подписывать у друзей</span><input id="shareName" maxlength="40" autocomplete="off"></label>
+    <div class="share-list" id="shareList"></div>
+    <div class="dialog-foot share-actions">
+      <button type="button" class="btn" id="btnInvite">👤 Пригласить друга</button>
+      <button type="button" class="btn" id="btnNewLink">🔗 Создать ссылку</button>
+    </div>
+    <p class="muted small">Друг должен войти в этот календарь (☁) с тем email, на который вы его пригласили. По ссылке календарь видно без входа — отправляйте её только тем, кому доверяете.</p>
+  </dialog>
+
+  <dialog class="dialog" id="shareEditor">
+    <form id="shareForm" method="dialog">
+      <div class="dialog-head">
+        <h2 id="shareEditorTitle">Пригласить друга</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+      </div>
+      <label class="field" id="shEmailWrap"><span>Email друга</span><input type="email" id="shEmail" autocomplete="off" inputmode="email"></label>
+      <label class="field"><span>Подпись для себя</span><input id="shLabel" maxlength="40" autocomplete="off"></label>
+      <div class="field" id="shLink" hidden><span>Ссылка</span>
+        <div class="share-link"><input id="shLinkUrl" readonly><button type="button" class="btn small" id="shCopy">Копировать</button></div>
+      </div>
+      <div class="field"><span>Что видно</span>
+        <div class="share-cats" id="shCats"></div>
+      </div>
+      <p class="muted small share-levels">«Только занято» — серые блоки без названий. «С названиями» — название и время.</p>
+      <label class="check"><input type="checkbox" id="shNotes"> Показывать заметки (там, где «С названиями»)</label>
+      <div class="dialog-foot">
+        <button type="button" class="btn danger-text" id="shDelete">Закрыть доступ</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" data-close>Отмена</button>
+        <button type="submit" class="btn primary">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="dialog" id="friendEvent">
+    <div class="dialog-head">
+      <h2 id="feTitle"></h2>
+      <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <p id="feWhen"></p>
+    <p class="muted fe-who" id="feWho"></p>
+    <p class="muted small" id="feBusy">Друг показывает здесь только, что занят, — без подробностей.</p>
+    <p class="fe-notes" id="feNotes"></p>
   </dialog>
 
   <dialog class="dialog help" id="help">
