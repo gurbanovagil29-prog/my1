@@ -5,7 +5,7 @@
  * Подключается до app.js и пользуется его помощниками (state, h, calOf…) только во время вызова.
  */
 
-/* global HOUR_H, state, h, $, readJSON, writeJSON, uid, calOf, colorOf, defaultCal, findEvent, render, toast, withUndo,
+/* global HOUR_H, yOf, state, h, $, readJSON, writeJSON, uid, calOf, colorOf, defaultCal, findEvent, render, toast, withUndo,
    relativeDay, formatDate, capitalize, makeDraggable, openNav, closeNav, editing, CALS_KEY, saveEvents,
    toKey, fromKey, today, addDays, startOfWeek, toMin, fromMin, collect, taskDeadline, normalizeTask, WD_SHORT,
    fillTaskReminder, buildTaskReminder, describeReminder, userTz, localParts, normalizePlan, makeDraggable, relativeDay */
@@ -169,7 +169,7 @@ function deadlineMarker(task) {
   const dl = deadlineOf(task);
   return h('div', {
     class: taskClasses(task, 'tg-deadline'),
-    style: { '--c': colorOf(task), top: `${(toMin(dl.time) / 60) * HOUR_H}px` },
+    style: { '--c': colorOf(task), top: `${yOf(toMin(dl.time))}px` },
   }, h('div', {
     class: 'tg-deadline-pill',
     role: 'button',
@@ -241,7 +241,7 @@ function planBlock(it) {
     dataset: { task: task.id },
     style: {
       '--c': colorOf(task),
-      top: `${(s / 60) * HOUR_H}px`,
+      top: `${yOf(s)}px`,
       height: `${Math.max(((e - s) / 60) * HOUR_H - 2, 18)}px`,
       left: `calc(${(col / cols) * 100}% + 2px)`,
       width: `calc(${100 / cols}% - 4px)`,

@@ -11,11 +11,18 @@
 
 /* global fromKey, addDays, toMin, endMinutes, collect, startOfWeek, parseQuick */
 
+/**
+ * Многодневное событие с началом и концом в пределах дня («всю неделю с 9 до 18 работа») —
+ * это ежедневный блок с 9 до 18. Если конец раньше начала («с пятницы 19:00 до воскресенья 18:00») —
+ * один сплошной отрезок, как поездка.
+ */
+const isDailySpan = (ev) => Boolean(ev.start && ev.end && ev.endDate && ev.endDate > ev.date && toMin(ev.end) > toMin(ev.start));
+
 /** Отрезки [начало, конец] в минутах, которые вхождение занимает в своём дне. */
 function occurrenceMinutes(o) {
   const { ev, index, len } = o;
   if (!ev.start) return null;
-  if (len === 1) return [toMin(ev.start), endMinutes(ev)];
+  if (len === 1 || isDailySpan(ev)) return [toMin(ev.start), endMinutes(ev)];
   const s = index === 0 ? toMin(ev.start) : 0;
   const e = index === len - 1 ? (ev.end ? toMin(ev.end) : 1440) : 1440;
   return e > s ? [s, e] : null;
@@ -47,8 +54,8 @@ const totalMinutes = (list) => list.reduce((sum, [s, e]) => sum + e - s, 0);
 
 /**
  * Сколько минут ушло на каждую категорию с from по to (Date, включительно).
- * Учитываются однодневные события со временем и блоки «Когда делаю»; события на весь день
- * и многодневные (поездки, отпуск) не считаются. Пересечения внутри одной категории считаются один раз.
+ * Учитываются события со временем (ежедневный блок многодневного — каждый день) и блоки «Когда делаю»;
+ * события на весь день и сплошные многодневные (поездки, отпуск) не считаются. Пересечения внутри одной категории считаются один раз.
  * catOf(item) — категория события или задачи. Возвращает { days: [{ key, byCat }], byCat, total }.
  */
 function timeStats({ events, tasks = [], from, to, catOf = (x) => x.cal }) {
@@ -59,7 +66,7 @@ function timeStats({ events, tasks = [], from, to, catOf = (x) => x.cal }) {
   for (const [key, list] of map) {
     const raw = {};
     const add = (cat, iv) => { if (iv) (raw[cat] = raw[cat] || []).push(iv); };
-    for (const o of list) if (o.len === 1) add(catOf(o.ev), occurrenceMinutes(o));
+    for (const o of list) if (o.len === 1 || isDailySpan(o.ev)) add(catOf(o.ev), occurrenceMinutes(o));
     for (const t of tasks) if (t.plan && t.plan.date === key) add(catOf(t), planMinutes(t.plan));
     const day = {};
     for (const [cat, ivs] of Object.entries(raw)) {
@@ -197,7 +204,7 @@ function parseSlotQuery(input, base) {
 
 if (typeof module !== 'undefined') {
   module.exports = {
-    occurrenceMinutes, planMinutes, mergeIntervals, timeStats, awakeIntervals, subtractIntervals,
+    isDailySpan, occurrenceMinutes, planMinutes, mergeIntervals, timeStats, awakeIntervals, subtractIntervals,
     findFreeSlots, slotDuration, parseSlotQuery,
   };
 }

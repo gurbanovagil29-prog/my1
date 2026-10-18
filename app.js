@@ -10,12 +10,17 @@
    refreshAlarms, runLocalAlarms, enableReminders, notifyStatusText, quietLabel, initReminders, initTaskReminderFields,
    setEditorReminds, editorReminds, reminderFromParse, describeReminder, userTz, quietHours, iso,
    plansByDay, planBlock, planChip, movePlan, planLabel, syncLinkedTaskDeadlines, mentionTargets, mentionSlug, normalizePlan, deadlineHint,
-   upcomingOccurrences, scheduleOverlays, initOverlays, initInsights, openSlots, quickSlotQuery, quickSlotPreview, slotSettingsLabel */
+   upcomingOccurrences, scheduleOverlays, initOverlays, isDailySpan, initInsights, openSlots, quickSlotQuery, quickSlotPreview, slotSettingsLabel */
 
 const STORE_KEY = 'everyday-calendar:events';
 const SETTINGS_KEY = 'everyday-calendar:settings';
 const CALS_KEY = 'everyday-calendar:calendars';
 const HOUR_H = 48;
+const DAY_START = 8 * 60; // сетка недели и дня начинается с 8:00 (раньше — только если там что-то есть)
+let gridStart = DAY_START;
+/** Время в минутах ↔ отступ сверху в сетке недели/дня. */
+const yOf = (min) => ((min - gridStart) / 60) * HOUR_H;
+const minOf = (y) => gridStart + (y / HOUR_H) * 60;
 const COLORS = ['#4f6bed', '#e5484d', '#f76b15', '#f5a524', '#30a46c', '#12a594', '#8e4ec6', '#e93d82', '#6b7280'];
 const VIEWS = ['month', 'week', 'day', 'agenda', 'tasks'];
 const DEFAULT_CALENDARS = [
@@ -276,7 +281,7 @@ function render() {
     if (state.autoScroll || prevScroll == null) {
       const now = new Date();
       const hasToday = $('.tg-col.is-today', view);
-      scroller.scrollTop = (hasToday ? Math.max(0, now.getHours() - 2) : 7) * HOUR_H;
+      scroller.scrollTop = Math.max(0, yOf(hasToday ? (now.getHours() - 2) * 60 : 7 * 60));
     } else {
       scroller.scrollTop = prevScroll;
     }
@@ -667,6 +672,20 @@ function renderTimeGrid(days) {
   const tasks = tasksByDay(days[0], days[days.length - 1], { standalone: true });
   const plans = plansByDay(days[0], days[days.length - 1]);
   const t = today();
+  // Многодневное событие с началом и концом в пределах дня — блоком в сетке каждого дня, а не полосой сверху
+  const inGrid = (o) => o.ev.start && (o.len === 1 || isDailySpan(o.ev));
+  const timed = new Map(days.map((d) => [toKey(d), map.get(toKey(d)).filter(inGrid)]));
+  const allDayMap = new Map(days.map((d) => [toKey(d), map.get(toKey(d)).filter((o) => !inGrid(o))]));
+  const timedTasks = new Map(days.map((d) => [toKey(d), (tasks.get(toKey(d)) || []).filter((task) => deadlineOf(task).time)]));
+  const timedPlans = new Map(days.map((d) => [toKey(d), (plans.get(toKey(d)) || []).filter((task) => task.plan.start)]));
+
+  // Сетка начинается с 8:00; если что-то стоит раньше — с часа этого дела
+  const starts = [
+    ...[...timed.values()].flat().map((o) => toMin(o.ev.start)),
+    ...[...timedTasks.values()].flat().map((task) => toMin(deadlineOf(task).time)),
+    ...[...timedPlans.values()].flat().map((task) => toMin(task.plan.start)),
+  ];
+  gridStart = Math.min(DAY_START, Math.floor(Math.min(1440, ...starts) / 60) * 60);
 
   const head = h('div', { class: 'tg-row tg-head' }, h('div'),
     days.map((d) => h('button', {
@@ -675,7 +694,7 @@ function renderTimeGrid(days) {
       onclick: () => selectDay(d, 'day'),
     }, h('span', { class: 'tg-wd' }, WD_SHORT[wdIndex(d)]), h('span', { class: 'tg-num' }, d.getDate()))));
 
-  const lanes = spanLanes(days, map);
+  const lanes = spanLanes(days, allDayMap);
   const allDay = h('div', { class: 'tg-row tg-allday' }, h('div', { class: 'tg-allday-label' }, 'весь день'),
     days.map((d, i) => {
       const key = toKey(d);
@@ -684,7 +703,7 @@ function renderTimeGrid(days) {
         if (e.target === cell) openEditor({ preset: { date: key, allDay: true } });
       });
       for (const s of lanes[i]) cell.append(s ? spanChip(s) : h('div', { class: 'chip-spacer' }));
-      for (const o of map.get(key)) if (!o.ev.start && o.len === 1) cell.append(chip(o));
+      for (const o of allDayMap.get(key)) if (!o.ev.start && o.len === 1) cell.append(chip(o));
       for (const task of plans.get(key) || []) if (!task.plan.start) cell.append(planChip(task));
       for (const task of tasks.get(key) || []) if (!deadlineOf(task).time) cell.append(taskChip(task));
       dropTarget(cell, key, 'allday');
@@ -692,11 +711,11 @@ function renderTimeGrid(days) {
     }));
 
   const hours = h('div', { class: 'tg-hours' });
-  for (let i = 1; i < 24; i++) hours.append(h('span', { style: { top: `${i * HOUR_H}px` } }, `${pad(i)}:00`));
-  const body = h('div', { class: 'tg-body', style: { height: `${24 * HOUR_H}px` } }, hours,
-    days.map((d) => dayColumn(d, map.get(toKey(d)).filter((o) => o.ev.start && o.len === 1), sameDay(d, t),
-      (tasks.get(toKey(d)) || []).filter((task) => deadlineOf(task).time),
-      (plans.get(toKey(d)) || []).filter((task) => task.plan.start))));
+  for (let i = gridStart / 60; i < 24; i++) {
+    hours.append(h('span', { class: i * 60 === gridStart ? 'is-first' : null, style: { top: `${yOf(i * 60)}px` } }, `${pad(i)}:00`));
+  }
+  const body = h('div', { class: 'tg-body', style: { height: `${yOf(1440)}px` } }, hours,
+    days.map((d) => dayColumn(d, timed.get(toKey(d)), sameDay(d, t), timedTasks.get(toKey(d)), timedPlans.get(toKey(d)))));
 
   return h('div', { class: 'tg', style: { '--cols': days.length, '--hour': `${HOUR_H}px` } },
     head, allDay, h('div', { class: 'tg-scroll' }, body));
@@ -707,7 +726,7 @@ function dayColumn(d, items, isToday, timedTasks, timedPlans = []) {
   const col = h('div', { class: `tg-col${isToday ? ' is-today' : ''}${wdIndex(d) >= 5 ? ' is-weekend' : ''}`, dataset: { date: key } });
   col.addEventListener('click', (e) => {
     if (e.target !== col) return;
-    const m = Math.min(snap((e.offsetY / HOUR_H) * 60 - 15, 30), 1410);
+    const m = Math.max(gridStart, Math.min(snap(minOf(e.offsetY) - 15, 30), 1410));
     openEditor({ preset: { date: key, start: fromMin(m), end: fromMin(m + 60) } });
   });
   dropTarget(col, key, col);
@@ -733,7 +752,7 @@ function dayColumn(d, items, isToday, timedTasks, timedPlans = []) {
 
 const nowTop = () => {
   const n = new Date();
-  return ((n.getHours() * 60 + n.getMinutes()) / 60) * HOUR_H;
+  return Math.max(0, yOf(n.getHours() * 60 + n.getMinutes()));
 };
 
 /** Раскладывает пересекающиеся события по колонкам. */
@@ -765,25 +784,30 @@ let suppressClickUntil = 0;
 let resizing = false;
 
 function eventBlock(it) {
-  const { ev, key, s, e, col, cols } = it;
-  const time = h('div', { class: 'tg-ev-time' }, formatTime(ev));
+  const { ev, key, s, e, col, cols, day, index = 0, len = 1 } = it;
+  // Ежедневный блок многодневного события: своё время и «день 2 из 5», прошедшим считается по своему дню
+  const daily = len > 1;
+  const span = `${ev.start}–${fromMin(e).replace('23:59', '24:00')}`;
+  const time = h('div', { class: 'tg-ev-time' }, daily ? `${span} · ${index + 1}/${len}` : formatTime(ev));
+  const d = fromKey(day || key);
+  const past = daily ? new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, e) < new Date() : isPast(ev, key);
   const el = h('div', {
-    class: `tg-ev${e - s < 45 ? ' is-short' : ''}${isPast(ev, key) ? ' is-past' : ''}`,
+    class: `tg-ev${e - s < 45 ? ' is-short' : ''}${past ? ' is-past' : ''}`,
     role: 'button',
     tabindex: '0',
     dataset: { ev: `${ev.id}|${key}` },
     style: {
       '--c': colorOf(ev),
-      top: `${(s / 60) * HOUR_H}px`,
+      top: `${yOf(s)}px`,
       height: `${Math.max(((e - s) / 60) * HOUR_H - 2, 18)}px`,
       left: `calc(${(col / cols) * 100}% + 2px)`,
       width: `calc(${100 / cols}% - 4px)`,
     },
-    title: `${ev.title}\n${formatTime(ev)} · ${calOf(ev).name}`,
+    title: `${ev.title}\n${daily ? `${formatTime(ev, key)}, каждый день ${span}` : formatTime(ev)} · ${calOf(ev).name}`,
     onclick: () => { if (Date.now() > suppressClickUntil) openEditor({ ev, key }); },
     onkeydown: (k) => { if (k.key === 'Enter') openEditor({ ev, key }); },
   }, h('div', { class: 'tg-ev-title' }, ev.repeat !== 'none' ? '↻ ' : '', ev.title, ' ', progressBadge(ev, key)), time);
-  makeDraggable(el, ev);
+  makeDraggable(el, ev, index);
 
   // Потянуть за нижний край — изменить длительность (для повторов меняется вся серия)
   const handle = h('div', { class: 'tg-resize', title: 'Потяните, чтобы изменить длительность' });
@@ -797,7 +821,7 @@ function eventBlock(it) {
     const move = (pm) => {
       newEnd = Math.min(1440, Math.max(s + 15, snap(e + ((pm.clientY - y0) / HOUR_H) * 60, 15)));
       el.style.height = `${((newEnd - s) / 60) * HOUR_H - 2}px`;
-      time.textContent = `${ev.start}–${fromMin(newEnd).replace('23:59', '24:00')}`;
+      time.textContent = `${ev.start}–${fromMin(newEnd).replace('23:59', '24:00')}${daily ? ` · ${index + 1}/${len}` : ''}`;
     };
     const up = () => {
       handle.removeEventListener('pointermove', move);
@@ -868,7 +892,7 @@ function dropTarget(el, key, mode) {
       let startMin = null;
       if (mode instanceof Element) {
         const r = mode.getBoundingClientRect();
-        startMin = Math.max(0, Math.min(1440 - 15, snap(((e.clientY - r.top) / HOUR_H) * 60 - drag.grabMin, 15)));
+        startMin = Math.max(0, Math.min(1440 - 15, snap(minOf(e.clientY - r.top) - drag.grabMin, 15)));
       }
       movePlan(drag.id, key, startMin);
       return;
@@ -891,7 +915,7 @@ function dropTarget(el, key, mode) {
       } else if (mode instanceof Element) {
         const dur = ev.start ? endMinutes(ev) - toMin(ev.start) : 60;
         const r = mode.getBoundingClientRect();
-        const s = Math.max(0, Math.min(1440 - 15, snap(((e.clientY - r.top) / HOUR_H) * 60 - grabMin, 15)));
+        const s = Math.max(0, Math.min(1440 - 15, snap(minOf(e.clientY - r.top) - grabMin, 15)));
         ev.start = fromMin(s);
         ev.end = fromMin(Math.min(s + dur, 1440));
       }
