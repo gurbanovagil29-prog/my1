@@ -998,7 +998,9 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: va
   .task-cal { display: none; }
   .segmented button { padding: 5px 4px; font-size: 13px; white-space: nowrap; }
   .segmented .badge { min-width: 16px; height: 16px; margin-left: 3px; padding: 0 4px; font-size: 10px; }
-  .quick-mode { padding: 5px 8px; }
+  .quick-mode { padding: 5px 9px; }
+  .quick-mode-label { display: none; }
+  .quick input::placeholder { font-size: 14px; }
   .chip-title { text-overflow: clip; }
   .more { font-size: 10px; padding: 0 3px; }
   .day-panel {

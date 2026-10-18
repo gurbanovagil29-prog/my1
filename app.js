@@ -1132,9 +1132,10 @@ const quickIsTask = () => state.quickMode === 'task' || TASK_PREFIX.test(quickIn
 
 function renderQuickMode() {
   const task = quickIsTask();
-  $('#quickMode').textContent = task ? '☑ Задача' : '⚡ Событие';
+  $('#quickMode').replaceChildren(h('span', {}, task ? '☑' : '⚡'), h('span', { class: 'quick-mode-label' }, task ? ' Задача' : ' Событие'));
+  $('#quickMode').setAttribute('aria-label', task ? 'Режим: задача' : 'Режим: событие');
   $('#quickMode').classList.toggle('is-task', task);
-  quickInput.placeholder = task ? 'Новая задача…' : 'Новое событие…';
+  quickInput.placeholder = task ? 'Новая задача…' : 'по пятницам в 19 спортзал #личное';
 }
 
 function quickParse() {
