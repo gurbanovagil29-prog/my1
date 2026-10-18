@@ -151,6 +151,7 @@ function taskChip(task) {
     class: taskClasses(task, 'chip is-task'),
     role: 'button',
     tabindex: '0',
+    dataset: { task: task.id },
     style: { '--c': colorOf(task) },
     title: taskTooltip(task),
     onclick: (e) => { e.stopPropagation(); openTaskEditor(task); },
@@ -237,6 +238,7 @@ function planBlock(it) {
     class: taskClasses(task, `tg-ev tg-plan${e - s < 45 ? ' is-short' : ''}`),
     role: 'button',
     tabindex: '0',
+    dataset: { task: task.id },
     style: {
       '--c': colorOf(task),
       top: `${(s / 60) * HOUR_H}px`,
@@ -261,6 +263,7 @@ function planChip(task) {
     class: taskClasses(task, 'chip is-task is-plan'),
     role: 'button',
     tabindex: '0',
+    dataset: { task: task.id },
     style: { '--c': colorOf(task) },
     title: `🕒 ${task.title}\n${planLabel(task.plan)}${deadlineHint(task) ? `\n${deadlineHint(task)}` : ''}`,
     onclick: (e) => { e.stopPropagation(); openTaskEditor(task); },

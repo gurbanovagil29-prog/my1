@@ -1,7 +1,7 @@
 // Офлайн-режим: файлы приложения хранятся в кэше на случай, если сети нет.
-const CACHE = 'everyday-calendar-v9';
+const CACHE = 'everyday-calendar-v10';
 const ASSETS = [
-  './', 'index.html', 'style.css', 'config.js', 'core.js', 'alarms.js', 'sync.js', 'tasks.js', 'reminders-ui.js', 'app.js',
+  './', 'index.html', 'style.css', 'config.js', 'core.js', 'alarms.js', 'sync.js', 'tasks.js', 'reminders-ui.js', 'overlays.js', 'app.js',
   'vendor/supabase-2.117.2.js', 'manifest.webmanifest', 'icon.svg',
 ];
 
