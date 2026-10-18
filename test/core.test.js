@@ -14,7 +14,7 @@ const parse = (text) => {
 test('быстрое добавление: дата, время и название', () => {
   assert.deepEqual(parse('завтра в 15 встреча с Аней'), {
     title: 'Встреча с Аней', date: '2026-10-18', start: '15:00', end: '16:00', repeat: 'none', allDay: false, tag: null, priority: 0, matched: true, endDate: null, spanDays: 0,
-    every: null, window: null, times: null, count: 0, inMinutes: 0, before: null, nag: false, remindWord: false,
+    every: null, window: null, times: null, count: 0, inMinutes: 0, before: null, nag: false, remindWord: false, mention: null, range: false,
   });
   assert.equal(parse('через 3 дня в 7 вечера кино').start, '19:00');
   assert.equal(parse('через 3 дня в 7 вечера кино').date, '2026-10-20');
@@ -157,6 +157,20 @@ test('многодневные события в календаре', () => {
   const [back] = c.fromICS(c.toICS([ev]), () => 'x');
   assert.equal(back.endDate, '2026-10-25');
   assert.equal(c.normalizeEvent({ ...trip, endDate: '2026-10-01' }).endDate, null);
+});
+
+test('быстрое добавление: задача к событию через @ и «когда делаю»', () => {
+  const r = parse('сделать проект в четверг с 19 до 23 @защита');
+  assert.equal(r.title, 'Сделать проект');
+  assert.equal(r.mention, 'защита');
+  assert.equal(r.date, '2026-10-22');
+  assert.deepEqual([r.start, r.end, r.range], ['19:00', '23:00', true]);
+  assert.equal(parse('слайды завтра в 18 @теория_финансов').mention, 'теория_финансов');
+  assert.equal(parse('слайды завтра в 18').range, false);
+  assert.equal(parse('подарок #личное @др_мамы').tag, 'личное');
+  assert.deepEqual(c.normalizePlan({ date: '2026-10-22', start: '19:00', end: '23:00' }), { date: '2026-10-22', start: '19:00', end: '23:00' });
+  assert.deepEqual(c.normalizePlan({ date: '2026-10-22', start: '19:00', end: '18:00' }), { date: '2026-10-22', start: '19:00', end: null });
+  assert.equal(c.normalizePlan({ date: 'потом' }), null);
 });
 
 test('обычный текст остаётся названием', () => {

@@ -153,3 +153,20 @@ test('тексты уведомлений', () => {
   assert.equal(a.alarmText('task', t, now, now, TZ).body, 'Срок прошёл: сегодня, 12:00');
   assert.equal(a.alarmText('task', t, now, now, TZ).title, '☑ Отчёт');
 });
+
+test('«когда делаю»: напоминание в начале блока и за час до срока', () => {
+  const task = normalizeTask({
+    id: 't', title: 'Сделать проект', due: '2026-10-24', time: '10:00', eventId: 'defense', eventKey: null,
+    plan: { date: '2026-10-22', start: '19:00', end: '23:00' },
+  });
+  const first = a.nextAlarm('task', task, at('2026-10-20', '12:00'), TZ);
+  assert.equal(show(first), '2026-10-22 19:00');
+  assert.deepEqual(a.alarmText('task', task, first, first, TZ), { title: '☑ Сделать проект', body: 'Пора начинать · до 23:00 · срок: сб, 24 окт, 10:00' });
+  assert.equal(show(a.nextAlarm('task', task, first, TZ)), '2026-10-24 09:00');
+  assert.equal(a.nextAlarm('task', { ...task, done: true }, first, TZ), null);
+  // Задача события без своего блока молчит — напоминает само событие
+  assert.equal(a.nextAlarm('task', { ...task, plan: null }, first, TZ), null);
+  // Блок изменили — расписание пересчитывается
+  const sig = a.alarmSig('task', task);
+  assert.notEqual(a.alarmSig('task', { ...task, plan: { ...task.plan, start: '20:00' } }), sig);
+});

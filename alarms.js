@@ -17,7 +17,8 @@
  *   snooze: ISO | null    — отложено до,
  *   quiet: ['23:30', '07:00'] — тихие часы, tz — часовой пояс,
  * }
- * Без reminder задача со временем напоминает за час до срока.
+ * Без reminder задача напоминает в начале блока «Когда делаю» (plan) и за час до срока, если у срока есть время.
+ * Задача события без своего блока молчит: о ней напоминает само событие.
  * alarmAt — следующий момент напоминания (ISO), alarmSig — по каким данным он посчитан.
  */
 
@@ -140,10 +141,12 @@ function nextTaskAlarm(task, after, tz) {
   if (task.done) return null;
   const r = task.reminder;
   if (!r) {
-    // По умолчанию — за час до срока, если у задачи есть время (задачи события напоминают через событие)
-    if (task.eventId || !task.due || !task.time) return null;
-    const t = zonedMs(task.due, task.time, tz) - 60 * MINUTE;
-    return t > after ? t : null;
+    const plan = task.plan?.start ? zonedMs(task.plan.date, task.plan.start, tz) : null;
+    // Задачи события без своего времени напоминают через само событие
+    const deadline = task.due && task.time && (!task.eventId || plan != null)
+      ? zonedMs(task.due, task.time, tz) - 60 * MINUTE : null;
+    const next = [plan, deadline].filter((t) => t != null && t > after);
+    return next.length ? Math.min(...next) : null;
   }
   const zone = r.tz || tz;
   const snooze = parseIso(r.snooze);
@@ -168,7 +171,7 @@ function nextAlarm(kind, item, after, tz) {
 function alarmSig(kind, item) {
   const f = kind === 'event'
     ? [item.date, item.start, item.endDate, item.repeat, item.until, item.exdates, item.reminds, item.snooze]
-    : [item.done, item.due, item.time, item.eventId, item.reminder];
+    : [item.done, item.due, item.time, item.eventId, item.plan, item.reminder];
   return JSON.stringify(f);
 }
 
@@ -221,6 +224,11 @@ function alarmText(kind, item, at, now, tz) {
       body = deadline < now
         ? `Срок прошёл: ${dayLabel(item.due, now, tz)}${item.time ? `, ${item.time}` : ''}`
         : `Срок: ${dayLabel(item.due, now, tz)}${item.time ? `, ${item.time}` : ''}`;
+    }
+    // Напоминание в начале блока «Когда делаю»
+    const planStart = item.plan?.start ? zonedMs(item.plan.date, item.plan.start, tz) : null;
+    if (planStart != null && Math.abs(at - planStart) < MINUTE) {
+      body = `Пора начинать${item.plan.end ? ` · до ${item.plan.end}` : ''}${item.due ? ` · ${body.charAt(0).toLowerCase()}${body.slice(1)}` : ''}`;
     }
     return { title: `☑ ${item.title}`, body };
   }
