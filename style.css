@@ -882,6 +882,42 @@ details.task-group[open] > summary::after { transform: rotate(90deg); }
 
 .app[data-view="tasks"] .nav-arrows, .app[data-view="tasks"] #btnToday { visibility: hidden; }
 
+/* ---------- Синхронизация ---------- */
+.sync-btn { font-size: 17px; color: var(--muted); }
+.sync-btn[data-status="ok"] { color: #30a46c; }
+.sync-btn[data-status="syncing"] { color: var(--accent); animation: spin 1s linear infinite; }
+.sync-btn[data-status="offline"], .sync-btn[data-status="error"] { color: #f5a524; }
+.sync-btn[data-status="signed-out"] { color: var(--accent); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.sync-dialog p { margin: 12px 0; }
+.sync-form { display: flex; flex-direction: column; gap: 4px; }
+.sync-email, .sync-code {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 16px;
+}
+.sync-code { font-size: 24px; letter-spacing: .3em; text-align: center; font-variant-numeric: tabular-nums; }
+.sync-form .dialog-foot { margin-top: 10px; }
+.sync-account { display: flex; align-items: center; gap: 12px; margin: 14px 0 4px; }
+.sync-account strong, .sync-account small { display: block; }
+.sync-account small { color: var(--muted); }
+.sync-avatar {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 700;
+  font-size: 18px;
+}
+.sync-error { color: var(--danger); font-size: 13px; }
+code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
+
 /* ---------- Мобильные ---------- */
 .backdrop { display: none; }
 .day-panel { display: none; }

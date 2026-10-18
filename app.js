@@ -5,7 +5,8 @@
    parseQuick, toICS, fromICS, normalizeEvent, normalizeTask, taskDeadline,
    TASKS_KEY, loadTasks, saveTasks, findTask, visibleTasks, deadlineOf, isOverdue, tasksByDay, linkedTasks, detachTasks,
    deadlineLabel, overdueLabel, taskChip, taskLine, deadlineMarker, progressBadge, moveTask, renderTasksView,
-   taskBadgeCount, openTaskEditor, initTasks, renderEvTasks, commitPendingTasks, compareTasks */
+   taskBadgeCount, openTaskEditor, initTasks, renderEvTasks, commitPendingTasks, compareTasks,
+   syncSoon, initSync, openSyncDialog, renderSyncStatus */
 
 const STORE_KEY = 'everyday-calendar:events';
 const SETTINGS_KEY = 'everyday-calendar:settings';
@@ -34,6 +35,7 @@ function readJSON(key, fallback) {
 function writeJSON(key, value) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+    if (key === STORE_KEY || key === TASKS_KEY || key === CALS_KEY) syncSoon();
     return true;
   } catch {
     return false;
@@ -1356,6 +1358,8 @@ $('#importFile').addEventListener('change', async (e) => {
 
 /* ---------- Управление ---------- */
 
+$('#btnSync').addEventListener('click', openSyncDialog);
+$('#btnSyncSide').addEventListener('click', openSyncDialog);
 $('#btnCreate').addEventListener('click', () => { closeNav(); if (state.view === 'tasks') openTaskEditor(); else openEditor(); });
 $('#btnToday').addEventListener('click', goToday);
 $('#btnPrev').addEventListener('click', () => go(-1));
@@ -1425,6 +1429,7 @@ window.addEventListener('storage', (e) => {
   if (e.key === STORE_KEY) state.events = loadEvents();
   else if (e.key === CALS_KEY) state.calendars = loadCalendars();
   else if (e.key === TASKS_KEY) state.tasks = loadTasks();
+  else if (e.key && e.key.startsWith('everyday-calendar:sync:')) return;
   else return;
   render();
 });
@@ -1453,3 +1458,4 @@ if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
 initTasks();
 render();
 checkReminders();
+initSync();

@@ -11,6 +11,8 @@
   <link rel="apple-touch-icon" href="icon.svg">
   <link rel="stylesheet" href="style.css">
   <script src="core.js" defer></script>
+  <script src="config.js" defer></script>
+  <script src="sync.js" defer></script>
   <script src="tasks.js" defer></script>
   <script src="app.js" defer></script>
 </head>
@@ -39,6 +41,7 @@
       <section class="side-list" id="sideList" aria-label="Ближайшие события"></section>
 
       <footer class="side-footer">
+        <button class="link-btn" id="btnSyncSide" type="button">☁ Синхронизация</button>
         <button class="link-btn" id="btnTheme" type="button"></button>
         <button class="link-btn" id="btnNotify" type="button"></button>
         <details class="side-more">
@@ -62,6 +65,8 @@
           <button class="icon-btn" id="btnNext" type="button" aria-label="Вперёд">›</button>
         </div>
         <h1 class="title" id="title"></h1>
+
+        <button class="icon-btn sync-btn" id="btnSync" type="button" data-status="off" aria-label="Синхронизация">☁</button>
 
         <div class="search">
           <input type="search" id="search" placeholder="Поиск" autocomplete="off" aria-label="Поиск событий">
@@ -208,6 +213,14 @@
         <button type="submit" class="btn primary">Сохранить</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog class="dialog sync-dialog" id="syncDialog">
+    <div class="dialog-head">
+      <h2>Синхронизация устройств</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <div id="syncBody"></div>
   </dialog>
 
   <dialog class="dialog help" id="help">
