@@ -1576,6 +1576,14 @@ setInterval(() => {
 }, 30000);
 
 if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+  // Вышла новая версия — новый сервис-воркер берёт управление, и страница один раз перезагружается
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return;
+    reloading = true;
+    location.reload();
+  });
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
