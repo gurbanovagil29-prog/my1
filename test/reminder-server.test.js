@@ -34,6 +34,7 @@ function fakeDb() {
     async deleteSubscription(endpoint) { subs.splice(subs.findIndex((s) => s.endpoint === endpoint), 1); },
     async getItem(user, kind, id) { return structuredClone(items.get(k(user, kind, id)) || null); },
     async updateItem(user, kind, id, data) { items.get(k(user, kind, id)).data = structuredClone(data); },
+    async userFromToken(token) { return token === 'good-token' ? 'u1' : null; },
   };
 }
 
@@ -127,4 +128,20 @@ test('ключи VAPID создаются один раз', async () => {
   const k2 = await server.publicKey();
   assert.equal(k1, k2);
   assert.match(k1, /^[A-Za-z0-9_-]{87}$/);
+});
+
+test('«Проверить push»: только для вошедшего, отчёт по каждому устройству', async () => {
+  const { db, sent, server } = setup(at('2026-10-19', '12:00'));
+  db.subs.push({ endpoint: 'phone', user_id: 'u1', p256dh: 'x', auth: 'y', tz: TZ }, { endpoint: 'gone', user_id: 'u1', p256dh: 'x', auth: 'y', tz: TZ },
+    { endpoint: 'other', user_id: 'u2', p256dh: 'x', auth: 'y', tz: TZ });
+  assert.equal((await server.testPush('bad')).status, 401);
+  assert.equal((await server.testPush('')).status, 401);
+  const r = await server.testPush('good-token');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.devices, 2);
+  assert.equal(r.body.sent, 1);
+  assert.deepEqual(r.body.results.map((x) => [x.endpoint, x.status]), [['phone', 201], ['gone', 410]]);
+  assert.deepEqual(sent.map((x) => [x.endpoint, x.title]), [['phone', '🔔 Проверка'], ['gone', '🔔 Проверка']]);
+  // Устаревшая подписка удалена, чужие не тронуты
+  assert.deepEqual(db.subs.map((x) => x.endpoint), ['phone', 'other']);
 });

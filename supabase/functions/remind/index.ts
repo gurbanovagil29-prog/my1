@@ -297,9 +297,10 @@ function alarmText(kind, item, at, now, tz) {
     let body = 'Отметьте, когда сделаете';
     if (item.due) {
       const deadline = zonedMs(item.due, item.time || '23:59', tz);
-      body = deadline < now
-        ? `Срок прошёл: ${dayLabel(item.due, now, tz)}${item.time ? `, ${item.time}` : ''}`
-        : `Срок: ${dayLabel(item.due, now, tz)}${item.time ? `, ${item.time}` : ''}`;
+      const when = `${dayLabel(item.due, now, tz)}${item.time ? `, ${item.time}` : ''}`;
+      // В пределах 5 минут от срока — «Срок: сейчас», позже — «Срок прошёл»
+      if (item.time && Math.abs(now - deadline) < 5 * MINUTE) body = `Срок: сейчас, ${item.time}`;
+      else body = deadline < now ? `Срок прошёл: ${when}` : `Срок: ${when}`;
     }
     // Напоминание в начале блока «Когда делаю»
     const planStart = item.plan?.start ? zonedMs(item.plan.date, item.plan.start, tz) : null;
@@ -497,6 +498,7 @@ if (typeof module !== 'undefined') {
  *   subscriptions(userIds) → [{ endpoint, user_id, p256dh, auth, tz }],
  *   claim(row, oldAlarmAt, data) → bool,                            — обновить, только если alarmAt не изменился
  *   deleteSubscription(endpoint), getItem(userId, kind, id) → row | null, updateItem(userId, kind, id, data),
+ *   userFromToken(accessToken) → userId | null,                    — кто прислал запрос (вход в аккаунт)
  * }
  * push(subscription, payloadString, vapid) → Response
  */
@@ -602,7 +604,29 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
     return { status: 200, body: { ok: true } };
   }
 
-  return { publicKey, runDue, action, sign };
+  /** Кнопка «Проверить push»: тестовое уведомление на все устройства пользователя и отчёт по каждому. */
+  async function testPush(accessToken) {
+    const userId = accessToken ? await db.userFromToken(accessToken) : null;
+    if (!userId) return { status: 401, body: { error: 'not signed in' } };
+    const subs = await db.subscriptions([userId]);
+    const k = await keys();
+    const vapid = { publicKey: k.public_key, privateJwk: k.private_jwk, subject };
+    const payload = JSON.stringify({ title: '🔔 Проверка', body: 'Push-уведомления работают', tag: 'push-test' });
+    const results = [];
+    for (const s of subs) {
+      try {
+        const res = await push(s, payload, vapid);
+        if (res.status === 404 || res.status === 410) await db.deleteSubscription(s.endpoint);
+        const detail = !res.ok && typeof res.text === 'function' ? await res.text().catch(() => '') : '';
+        results.push({ endpoint: s.endpoint, status: res.status, ok: res.ok, error: detail ? detail.slice(0, 200) : null });
+      } catch (err) {
+        results.push({ endpoint: s.endpoint, status: 0, ok: false, error: String(err?.message || err) });
+      }
+    }
+    return { status: 200, body: { devices: subs.length, sent: results.filter((r) => r.ok).length, results } };
+  }
+
+  return { publicKey, runDue, action, sign, testPush };
 }
 
 if (typeof module !== 'undefined') {
@@ -656,6 +680,10 @@ const db = {
   async deleteSubscription(endpoint) { await rest(`push_subscriptions?endpoint=eq.${q(endpoint)}`, { method: 'DELETE' }); },
   async getItem(u, k, id) { return (await rest(`items?select=user_id,kind,id,data&${itemFilter(u, k, id)}&deleted=is.false`))[0] || null; },
   async updateItem(u, k, id, data) { await rest(`items?${itemFilter(u, k, id)}`, { method: 'PATCH', body: { data } }); },
+  async userFromToken(token) {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${token}` } });
+    return res.ok ? (await res.json()).id || null : null;
+  },
 };
 
 const server = createReminderServer({
@@ -673,12 +701,16 @@ const CORS = {
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
 
 // GET — публичный ключ для подписки браузера; POST от расписания — разослать напоминания;
-// POST с action — кнопка «Сделал» / «Отложить» из уведомления
+// POST с action — кнопка «Сделал» / «Отложить» из уведомления; action: 'test' — «Проверить push» (нужен вход в аккаунт)
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
   try {
     if (req.method === 'GET') return json({ publicKey: await server.publicKey() });
     const body = await req.json().catch(() => ({}));
+    if (body.action === 'test') {
+      const r = await server.testPush((req.headers.get('authorization') || '').replace(/^Bearer\s+/i, ''));
+      return json(r.body, r.status);
+    }
     if (body.action === 'done' || body.action === 'snooze') {
       const r = await server.action(body);
       return json(r.body, r.status);
