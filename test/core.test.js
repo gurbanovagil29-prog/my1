@@ -14,6 +14,7 @@ const parse = (text) => {
 test('быстрое добавление: дата, время и название', () => {
   assert.deepEqual(parse('завтра в 15 встреча с Аней'), {
     title: 'Встреча с Аней', date: '2026-10-18', start: '15:00', end: '16:00', repeat: 'none', allDay: false, tag: null, priority: 0, matched: true, endDate: null, spanDays: 0,
+    every: null, window: null, times: null, count: 0, inMinutes: 0, before: null, nag: false, remindWord: false,
   });
   assert.equal(parse('через 3 дня в 7 вечера кино').start, '19:00');
   assert.equal(parse('через 3 дня в 7 вечера кино').date, '2026-10-20');

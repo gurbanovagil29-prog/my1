@@ -1,7 +1,7 @@
 // Офлайн-режим: файлы приложения хранятся в кэше на случай, если сети нет.
-const CACHE = 'everyday-calendar-v7';
+const CACHE = 'everyday-calendar-v8';
 const ASSETS = [
-  './', 'index.html', 'style.css', 'config.js', 'core.js', 'sync.js', 'tasks.js', 'app.js',
+  './', 'index.html', 'style.css', 'config.js', 'core.js', 'alarms.js', 'sync.js', 'tasks.js', 'reminders-ui.js', 'app.js',
   'vendor/supabase-2.117.2.js', 'manifest.webmanifest', 'icon.svg',
 ];
 
@@ -40,9 +40,58 @@ self.addEventListener('fetch', (e) => {
   })());
 });
 
+// Push от сервера (функция «remind» в Supabase): показать уведомление и плашку в открытом календаре
+self.addEventListener('push', (e) => {
+  let d;
+  try {
+    d = e.data.json();
+  } catch {
+    d = { title: 'Календарь', body: e.data ? e.data.text() : '' };
+  }
+  const actions = d.kind === 'task'
+    ? [{ action: 'done', title: '✓ Сделал' }, { action: 'snooze15', title: 'Через 15 мин' }]
+    : [{ action: 'snooze15', title: 'Через 15 мин' }];
+  e.waitUntil(Promise.all([
+    self.registration.showNotification(d.title, {
+      body: d.body, tag: d.tag, renotify: true, icon: 'icon.svg', badge: 'icon.svg', data: d, actions,
+    }),
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then((list) => list.forEach((c) => c.postMessage({ type: 'alarm', alarm: d }))),
+  ]));
+});
+
 self.addEventListener('notificationclick', (e) => {
+  const d = e.notification.data || {};
   e.notification.close();
-  e.waitUntil(
-    self.clients.matchAll({ type: 'window' }).then((list) => (list[0] ? list[0].focus() : self.clients.openWindow('./'))),
-  );
+  const action = e.action;
+  e.waitUntil((async () => {
+    const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if ((action === 'done' || action === 'snooze15') && d.kind) {
+      if (d.token && d.actionUrl) {
+        // Кнопка в уведомлении работает и при закрытом календаре: сразу сообщаем серверу
+        try {
+          const res = await fetch(d.actionUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: action === 'done' ? 'done' : 'snooze', minutes: 15, user: d.user, type: d.kind, id: d.id, token: d.token }),
+          });
+          if (res.ok) return;
+        } catch {
+          // Нет сети — передадим действие календарю
+        }
+      }
+      if (list[0]) {
+        list[0].postMessage({ type: 'alarm-action', action, kind: d.kind, id: d.id });
+        return;
+      }
+      await self.clients.openWindow(`./?alarm=${d.kind}:${d.id}`);
+      return;
+    }
+    if (list[0]) {
+      await list[0].focus();
+      if (d.kind) list[0].postMessage({ type: 'alarm', alarm: d });
+      return;
+    }
+    await self.clients.openWindow(d.kind ? `./?alarm=${d.kind}:${d.id}` : './');
+  })());
 });
