@@ -21,6 +21,10 @@
   <script src="overlays.js" defer></script>
   <script src="insights-ui.js" defer></script>
   <script src="friends.js" defer></script>
+  <script src="invites.js" defer></script>
+  <script src="notify-settings.js" defer></script>
+  <script src="onboarding.js" defer></script>
+  <script src="share-image.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -66,6 +70,7 @@
         <button class="link-btn" id="btnTheme" type="button"></button>
         <button class="link-btn" id="btnNotify" type="button"></button>
         <button class="link-btn" id="btnPushTest" type="button">🧪 Проверить push</button>
+        <button class="link-btn" id="btnNotifySettings" type="button">☀️ Сводка и Telegram</button>
         <button class="link-btn" id="btnQuiet" type="button"></button>
         <button class="link-btn" id="btnSleep" type="button" title="Время сна и запас между делами — для поиска свободного окна"></button>
         <button class="link-btn" id="btnLinks" type="button"></button>
@@ -76,6 +81,7 @@
           <button class="link-btn" id="btnImport" type="button">Импорт из .json или .ics</button>
           <input type="file" id="importFile" accept=".json,.ics,application/json,text/calendar" hidden>
         </details>
+        <button class="link-btn" id="btnOnboarding" type="button">❓ Как пользоваться</button>
         <button class="link-btn" id="btnHelp" type="button">Горячие клавиши</button>
       </footer>
     </aside>
@@ -90,6 +96,7 @@
           <button class="icon-btn" id="btnNext" type="button" aria-label="Вперёд">›</button>
         </div>
         <h1 class="title" id="title"></h1>
+        <button class="icon-btn" id="btnShareWeek" type="button" title="Поделиться неделей картинкой" aria-label="Поделиться неделей картинкой" hidden>📤</button>
 
         <button class="icon-btn sync-btn" id="btnSync" type="button" data-status="off" aria-label="Синхронизация">☁︎</button>
 
@@ -113,6 +120,8 @@
         <span class="quick-preview" id="quickPreview"></span>
         <div class="mention-list" id="mentionList" role="listbox" aria-label="События" hidden></div>
       </form>
+
+      <div class="countdown" id="countdown" hidden></div>
 
       <div class="cal-bar" id="calBar" role="group" aria-label="Показывать календари"></div>
 
@@ -138,6 +147,7 @@
         <label class="field"><span>Начало</span><input type="time" id="fStart" step="300"></label>
         <label class="field"><span>Конец</span><input type="time" id="fEnd" step="300"></label>
       </div>
+      <p class="conflict-warn" id="fConflict" hidden></p>
 
       <div class="field-row">
         <label class="field"><span>Повтор</span>
@@ -146,12 +156,19 @@
         <label class="field" id="untilWrap"><span>Повторять до</span><input type="date" id="fUntil"></label>
       </div>
 
+      <label class="check pin-check"><input type="checkbox" id="fPin"> 📌 Обратный отсчёт — показывать сверху «До … N дней»</label>
+
       <div class="field"><span>Напомнить</span>
         <div class="remind-chips" id="fReminds" role="group" aria-label="За сколько напомнить"></div>
       </div>
 
       <div class="field"><span>Календарь</span>
         <div class="cal-picker" id="fCal" role="radiogroup" aria-label="Календарь"></div>
+      </div>
+
+      <div class="field" id="fInviteWrap" hidden><span>👥 Пригласить друзей</span>
+        <div class="remind-chips" id="fInvite" role="group" aria-label="Кого пригласить"></div>
+        <small class="muted" id="fInviteHint"></small>
       </div>
 
       <div class="field">
@@ -383,7 +400,12 @@
       <label class="field"><span>Подпись для себя</span><input id="shLabel" maxlength="40" autocomplete="off"></label>
       <div class="field" id="shLink" hidden><span>Ссылка</span>
         <div class="share-link"><input id="shLinkUrl" readonly><button type="button" class="btn small" id="shCopy">Копировать</button></div>
+        <small class="muted" id="shStats"></small>
+        <button type="button" class="link-btn inline" id="shReissue">🔄 Новая ссылка — старая сразу перестанет работать</button>
       </div>
+      <label class="field" id="shExpiryWrap" hidden><span>Срок действия ссылки</span>
+        <select id="shExpiry"></select>
+      </label>
       <div class="field"><span>Что видно</span>
         <div class="share-cats" id="shCats"></div>
       </div>
@@ -407,6 +429,63 @@
     <p class="muted fe-who" id="feWho"></p>
     <p class="muted small" id="feBusy">Друг показывает здесь только, что занят, — без подробностей.</p>
     <p class="fe-notes" id="feNotes"></p>
+  </dialog>
+
+  <dialog class="dialog" id="inviteCard">
+    <div class="dialog-head">
+      <h2 id="icTitle"></h2>
+      <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <p id="icWhen"></p>
+    <p class="muted" id="icFrom"></p>
+    <p class="fe-notes" id="icNotes"></p>
+    <div id="icActions">
+      <div class="field"><span>В какой календарь добавить</span><div class="cal-picker" id="icCal" role="radiogroup"></div></div>
+      <div class="dialog-foot invite-answers">
+        <button type="button" class="btn" id="icNo">✕ Не смогу</button>
+        <button type="button" class="btn" id="icMaybe">? Может быть</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn primary" id="icYes">✓ Приду</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="dialog" id="notifyDialog">
+    <div class="dialog-head">
+      <h2>Сводка и Telegram</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <div id="notifyBody"></div>
+  </dialog>
+
+  <dialog class="dialog onboarding" id="onboarding">
+    <div class="dialog-head">
+      <span class="spacer"></span>
+      <button type="button" class="link-btn inline" data-close>Пропустить</button>
+    </div>
+    <div class="onb-body" id="onbBody"></div>
+    <div class="onb-foot">
+      <button type="button" class="btn" id="onbBack">Назад</button>
+      <div class="onb-dots" id="onbDots"></div>
+      <button type="button" class="btn primary" id="onbNext">Далее</button>
+    </div>
+  </dialog>
+
+  <dialog class="dialog week-share" id="weekShare">
+    <div class="dialog-head">
+      <h2>Неделя картинкой</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <div class="ws-options">
+      <div class="ws-cats" id="wsCats"></div>
+      <label class="check"><input type="checkbox" id="wsTitles"> Названия (иначе — «Занято»)</label>
+      <label class="check"><input type="checkbox" id="wsTasks"> Задачи</label>
+    </div>
+    <img class="ws-preview" id="wsPreview" alt="Картинка недели">
+    <div class="dialog-foot"><span class="spacer"></span>
+      <button type="button" class="btn" data-close>Отмена</button>
+      <button type="button" class="btn primary" id="wsSend">📤 Поделиться</button>
+    </div>
   </dialog>
 
   <dialog class="dialog help" id="help">

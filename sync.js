@@ -313,12 +313,14 @@ async function initSync() {
         // Подписка этого устройства на push (часовой пояс, ключ сервера)
         if (typeof onSyncUser === 'function') onSyncUser();
         if (typeof onFriendsUser === 'function') onFriendsUser();
+        if (typeof onPrefsUser === 'function') onPrefsUser();
       }, 0);
       if (event === 'SIGNED_IN') toast(`Вы вошли: ${user.email || 'аккаунт'}. Данные синхронизируются`);
     } else {
       stopEngine();
       setSyncStatus('signed-out');
       if (typeof onFriendsUser === 'function') setTimeout(onFriendsUser, 0);
+      if (typeof onPrefsUser === 'function') setTimeout(onPrefsUser, 0);
     }
     renderSyncDialog();
   });

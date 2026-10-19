@@ -6,10 +6,13 @@
  * Что отдаёт сервер, решают функции в supabase/friends.sql; здесь — окна и показ.
  */
 
-/* global state, sync, h, $, $$, toast, render, saveSettings, closeNav, formatDate, formatTime, capitalize, fromKey,
-   COLORS, SHARE_LEVELS, normalizeShareSettings, buildLayer, nameMatches */
+/* global state, sync, h, $, $$, toast, render, saveSettings, closeNav, formatDate, formatTime, capitalize, fromKey, relativeDay, plural,
+   COLORS, SHARE_LEVELS, normalizeShareSettings, buildLayer, nameMatches, inviteEvents, openInviteCard, loadInvites, inviteRows */
+
+const EXPIRY_DAYS = { 1: '1 день', 7: '7 дней', 30: '30 дней' };
 
 const friends = {
+  opened: new Set(), // ссылки, открытие которых уже посчитано в этом сеансе
   invites: [], // приглашения мне: { id, owner_name }
   mine: null, // мои доступы (для окна «Поделиться»), загружаются при открытии
   loadedAt: 0,
@@ -22,12 +25,16 @@ const findLayer = (key) => (state.layers || []).find((l) => l.key === key);
 
 /** Календарь-«категория» для событий слоя: цвет и переключатель у слоя свои. */
 function layerCal(key) {
+  if (key === 'inv') return { id: 'inv', name: 'Приглашения', color: '#8e4ec6', visible: true };
   const l = findLayer(key);
   return l ? { id: key, name: l.name, color: l.color, visible: l.visible } : { id: key, name: 'Друг', color: '#6b7280', visible: false };
 }
 
 /** События включённых слоёв. */
-const visibleLayerEvents = () => (state.layers || []).filter((l) => l.visible).flatMap((l) => l.events);
+const visibleLayerEvents = () => [
+  ...(state.layers || []).filter((l) => l.visible).flatMap((l) => l.events),
+  ...(typeof inviteEvents === 'function' ? inviteEvents() : []), // приглашения, на которые ещё не ответили
+];
 
 const shareLink = (token) => `${location.origin}${location.pathname}?share=${token}`;
 const myShareName = () => state.settings.shareName || (sync.user?.email || '').split('@')[0] || 'Я';
@@ -60,9 +67,12 @@ function loadLayers() {
     const links = state.settings.links || [];
     const linkJobs = links.map(async (link) => {
       const key = `l:${link.token}`;
-      const { data, error } = await sync.client.rpc('link_items', { p_token: link.token });
+      // Открытие считаем один раз за сеанс, а не при каждом обновлении
+      const first = !friends.opened.has(link.token);
+      const { data, error } = await sync.client.rpc('link_items', { p_token: link.token, p_open: first });
+      if (!error) friends.opened.add(link.token);
       if (error) return { key, type: 'link', token: link.token, name: link.name || 'Календарь по ссылке', cals: new Map(), events: [], color: layerColor(key), visible: false, error: error.message };
-      if (!data.length) return { key, type: 'link', token: link.token, name: link.name || 'Календарь по ссылке', cals: new Map(), events: [], color: layerColor(key), visible: false, error: 'Ссылку отозвали' };
+      if (!data.length) return { key, type: 'link', token: link.token, name: link.name || 'Календарь по ссылке', cals: new Map(), events: [], color: layerColor(key), visible: false, error: 'Ссылку отозвали или её срок истёк' };
       return makeLayer(key, 'link', data, { token: link.token });
     });
     let friendJobs = [];
@@ -75,7 +85,7 @@ function loadLayers() {
         friendJobs = incoming.filter((s) => s.accepted).map(async (s) => {
           const key = `s:${s.id}`;
           const { data, error: err } = await sync.client.rpc('friend_items', { p_share: s.id });
-          const base = { shareId: s.id, name: s.owner_name || 'Друг' };
+          const base = { shareId: s.id, ownerId: s.owner, name: s.owner_name || 'Друг' };
           if (err) return { key, type: 'friend', ...base, cals: new Map(), events: [], color: layerColor(key), visible: false, error: err.message };
           return makeLayer(key, 'friend', data, base);
         });
@@ -93,6 +103,7 @@ function loadLayers() {
     }
     if (changed) saveSettings();
     friends.loadedAt = Date.now();
+    if (typeof loadInvites === 'function') await loadInvites();
     render();
   })().catch((err) => console.warn('Друзья:', err)).finally(() => { friends.loading = null; });
   return friends.loading;
@@ -165,6 +176,7 @@ function renderFriends() {
     h('button', { class: 'cal-action', type: 'button', title: 'Другой цвет', onclick: () => cycleLayerColor(l.key) }, '🎨'),
     h('button', { class: 'cal-action', type: 'button', title: 'Убрать', 'aria-label': `Убрать «${l.name}»`, onclick: () => removeLayer(l) }, '✕'))),
   ];
+  if (typeof inviteRows === 'function') rows.unshift(...inviteRows());
   box.replaceChildren(...(rows.length ? rows : [h('div', { class: 'side-empty' },
     friends.missingTable ? 'Чтобы делиться календарём, выполните supabase/friends.sql в Supabase' : 'Поделитесь своим календарём кнопкой ＋ или откройте ссылку друга')]));
 }
@@ -183,6 +195,7 @@ function layerChips() {
 /* ---------- Событие друга: только просмотр ---------- */
 
 function openFriendEvent(ev, key) {
+  if (ev.friend === 'inv') return openInviteCard(ev.inviteId);
   const l = findLayer(ev.friend);
   const cat = l?.cals.get(ev.friendCal)?.name;
   $('#feTitle').textContent = ev.title;
@@ -231,13 +244,27 @@ function levelSummary(settings) {
   return 'выборочно';
 }
 
+const expired = (s) => Boolean(s.expires_at && Date.parse(s.expires_at) <= Date.now());
+const shortWhen = (iso) => {
+  const d = new Date(iso);
+  return `${relativeDay(new Date(d.getFullYear(), d.getMonth(), d.getDate()))?.toLowerCase() || formatDate(d, { weekday: false })} в ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+function linkStatus(s) {
+  if (expired(s)) return 'срок истёк';
+  return s.expires_at ? `до ${formatDate(new Date(s.expires_at), { weekday: false })}` : 'без срока';
+}
+function linkStats(s) {
+  if (!s.open_count) return 'Ещё не открывали';
+  return `Открывали ${s.open_count} ${plural(s.open_count, 'раз', 'раза', 'раз')}, последний — ${shortWhen(s.last_opened)}`;
+}
+
 function renderShareList() {
   const list = friends.mine || [];
   $('#shareList').replaceChildren(...(list.length ? list.map((s) => h('div', { class: 'share-row' },
     h('div', { class: 'share-who' },
       h('strong', {}, s.kind === 'link' ? `🔗 ${s.label || 'Ссылка'}` : `👤 ${s.label || s.email}`),
-      h('small', {}, s.kind === 'link'
-        ? `По ссылке · ${levelSummary(s.settings)}`
+      h('small', { class: s.kind === 'link' && expired(s) ? 'is-expired' : null }, s.kind === 'link'
+        ? `По ссылке · ${linkStatus(s)} · ${levelSummary(s.settings)} · ${s.open_count ? `открывали ${s.open_count}` : 'не открывали'}`
         : `${s.email} · ${s.accepted ? 'видит' : 'ещё не принял'} · ${levelSummary(s.settings)}`)),
     s.kind === 'link' ? h('button', { class: 'btn small', type: 'button', onclick: () => copyLink(s.token) }, 'Копировать') : null,
     h('button', { class: 'icon-btn small', type: 'button', title: 'Настроить', 'aria-label': 'Настроить', onclick: () => openShareEditor(s) }, '✎')))
@@ -258,10 +285,10 @@ async function copyLink(token) {
   }
 }
 
-let editingShare = null; // { id | null, kind }
+let editingShare = null; // { id | null, kind, token }
 
 function openShareEditor(share = null, kind = 'friend') {
-  editingShare = { id: share?.id || null, kind: share?.kind || kind };
+  editingShare = { id: share?.id || null, kind: share?.kind || kind, token: share?.token || null };
   const s = normalizeShareSettings(share?.settings);
   const isFriend = editingShare.kind === 'friend';
   $('#shareEditorTitle').textContent = share ? (isFriend ? 'Доступ друга' : 'Доступ по ссылке') : (isFriend ? 'Пригласить друга' : 'Новая ссылка');
@@ -273,7 +300,16 @@ function openShareEditor(share = null, kind = 'friend') {
   $('#shNotes').checked = s.notes;
   $('#shDelete').hidden = !share;
   $('#shLink').hidden = !share || isFriend;
-  if (share && !isFriend) $('#shLinkUrl').value = shareLink(share.token);
+  if (share && !isFriend) {
+    $('#shLinkUrl').value = shareLink(share.token);
+    $('#shStats').textContent = linkStats(share);
+  }
+  // Срок действия ссылки: у новой — 30 дней, у существующей — «не менять» или продлить
+  $('#shExpiryWrap').hidden = isFriend;
+  $('#shExpiry').replaceChildren(
+    ...(share ? [h('option', { value: 'keep', selected: true }, `Не менять — ${linkStatus(share)}`)] : []),
+    ...Object.entries(EXPIRY_DAYS).map(([d, label]) => h('option', { value: d, selected: !share && d === '30' }, share ? `${label} с сегодня` : label)),
+    h('option', { value: 'none' }, 'Без срока'));
   const select = (name, value) => h('select', { name },
     ...Object.entries(SHARE_LEVELS).map(([v, label]) => h('option', { value: v, selected: v === value }, label)));
   $('#shCats').replaceChildren(
@@ -300,6 +336,11 @@ async function saveShare(e) {
   e.preventDefault();
   const settings = readShareEditor();
   const row = { label: $('#shLabel').value.trim(), settings, owner_name: myShareName() };
+  if (editingShare.kind === 'link') {
+    const v = $('#shExpiry').value;
+    if (v === 'none') row.expires_at = null;
+    else if (v !== 'keep') row.expires_at = new Date(Date.now() + +v * 86400000).toISOString();
+  }
   if (editingShare.kind === 'friend') {
     const email = $('#shEmail').value.trim().toLowerCase();
     if (!/^\S+@\S+\.\S+$/.test(email)) return toast('Проверьте email');
@@ -318,6 +359,18 @@ async function saveShare(e) {
   else if (!editingShare.id) {
     toast(`Готово. Пусть ${data.email} войдёт в этот календарь (☁) с этим email — приглашение появится у него слева, в «Друзьях»`, { duration: 10000 });
   } else toast('Сохранено');
+}
+
+async function reissueLink() {
+  if (!editingShare?.id || !confirm('Сделать новую ссылку? Старая сразу перестанет работать — новую нужно будет отправить заново.')) return;
+  const { data, error } = await sync.client.rpc('reissue_link', { p_id: editingShare.id });
+  if (error) return toast(`Не получилось: ${error.message}`, { duration: 8000 });
+  editingShare.token = data;
+  $('#shLinkUrl').value = shareLink(data);
+  $('#shStats').textContent = 'Ещё не открывали';
+  await loadMyShares().catch(() => {});
+  renderShareList();
+  copyLink(data);
 }
 
 async function deleteShare() {
@@ -384,12 +437,23 @@ function initFriends() {
   $('#shareForm').addEventListener('submit', saveShare);
   $('#shDelete').addEventListener('click', deleteShare);
   $('#shCopy').addEventListener('click', () => copyLink($('#shLinkUrl').value.split('share=')[1]));
+  $('#shReissue').addEventListener('click', reissueLink);
   $('#shareName').addEventListener('change', saveShareName);
   // Чужие календари обновляются при возвращении в приложение и раз в 5 минут
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && Date.now() - friends.loadedAt > 60000) loadLayers();
   });
   setInterval(() => { if (!document.hidden) loadLayers(); }, 5 * 60000);
+}
+
+/** Друзья, которых можно пригласить на событие: показывают мне свой календарь или видят мой. */
+function friendPeople() {
+  const people = new Map();
+  for (const l of state.layers || []) if (l.type === 'friend' && l.ownerId) people.set(l.ownerId, l.name);
+  for (const s of friends.mine || []) {
+    if (s.kind === 'friend' && s.accepted && s.viewer && !people.has(s.viewer)) people.set(s.viewer, s.label || s.email);
+  }
+  return [...people].map(([id, name]) => ({ id, name }));
 }
 
 /** Слой для совместного поиска окна: «с Аней» → ключ слоя. */

@@ -82,3 +82,18 @@ test('многодневное с началом и концом — ежедн�
   const slots = ins.findFreeSlots({ events: [work], keys: ['2026-10-20'], duration: 60, sleep: ['23:30', '07:00'], buffer: 0, max: 5 });
   assert.deepEqual(show(slots), ['2026-10-20 07:00-08:00', '2026-10-20 18:00-19:00']);
 });
+
+test('пересечения: с событиями, повторами и блоками «Когда делаю»', () => {
+  const events = [
+    ev({ title: 'Семинар', date: '2026-10-20', start: '14:00', end: '15:30' }),
+    ev({ title: 'Спорт', date: '2026-10-06', start: '19:00', end: '20:00', repeat: 'weekly' }),
+    ev({ title: 'Весь день', date: '2026-10-20' }),
+  ];
+  const tasks = [{ id: 't', title: 'Проект', done: false, plan: { date: '2026-10-20', start: '16:00', end: '18:00' } }];
+  const c = (cand, extra) => ins.findConflicts(ev({ title: 'новое', ...cand }), { events, tasks, ...extra }).map((x) => `${x.title} ${x.start}–${x.end}`);
+  assert.deepEqual(c({ date: '2026-10-20', start: '15:00', end: '16:30' }), ['Семинар 14:00–15:30', '☑ Проект 16:00–18:00', 'Спорт 19:00–20:00'].slice(0, 2));
+  assert.deepEqual(c({ date: '2026-10-20', start: '19:30', end: '21:00' }), ['Спорт 19:00–20:00']);
+  assert.deepEqual(c({ date: '2026-10-20', start: '15:30', end: '16:00' }), []);
+  assert.deepEqual(c({ date: '2026-10-20' }), []);
+  assert.deepEqual(ins.findConflicts(events[0], { events, tasks, excludeId: events[0].id }), []);
+});

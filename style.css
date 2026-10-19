@@ -1282,3 +1282,79 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: va
 .fe-who { display: flex; align-items: center; }
 .fe-notes { white-space: pre-line; }
 #friendEvent p { margin: 10px 0 0; }
+
+/* ---------- Обратный отсчёт и пересечения ---------- */
+.countdown { display: flex; gap: 8px; margin: 0 16px 10px; overflow-x: auto; scrollbar-width: none; }
+.countdown::-webkit-scrollbar { display: none; }
+.countdown-item {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border: 1px solid color-mix(in srgb, var(--c) 40%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--c) 10%, var(--surface));
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.countdown-item.is-soon { background: color-mix(in srgb, var(--c) 22%, var(--surface)); border-color: var(--c); }
+.conflict-warn { margin: -4px 0 0; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, #f5a524 16%, transparent); color: var(--text); font-size: 13px; }
+.pin-check { padding: 0; }
+@media (max-width: 860px) {
+  .countdown { margin: 0 12px 8px; }
+  .countdown-item { padding: 5px 10px; font-size: 12px; }
+}
+.share-who small.is-expired { color: var(--danger); }
+#shLink small { margin-top: 4px; }
+
+/* ---------- Приглашения на события ---------- */
+.invite-chip small { font-weight: 400; }
+.invite-status.is-accepted { color: #30a46c; }
+.invite-status.is-declined { color: var(--danger); }
+.event-invite { width: 100%; text-align: left; border: 0; cursor: pointer; color: var(--text); }
+.event-invite small { color: var(--muted); }
+.invite-badge { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.invite-answers { flex-wrap: wrap; }
+#inviteCard p { margin: 10px 0 0; }
+#icActions { margin-top: 14px; display: flex; flex-direction: column; gap: 14px; }
+
+/* ---------- Сводка и Telegram ---------- */
+.notify-sec { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.notify-sec:last-child { border-bottom: 0; }
+.notify-sec h3 { margin: 0 0 6px; font-size: 15px; }
+.notify-sec .check { padding: 4px 0; }
+.notify-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.notify-row input[type="time"] { padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); }
+a.btn { display: inline-block; text-decoration: none; color: inherit; }
+a.btn.primary { color: var(--accent-text); }
+
+/* ---------- Знакомство ---------- */
+.onboarding { width: min(520px, calc(100vw - 24px)); }
+.onb-body { text-align: center; padding: 4px 6px 10px; }
+.onb-body h2 { margin: 6px 0 8px; font-size: 22px; }
+.onb-icon { font-size: 44px; line-height: 1; }
+.onb-examples { display: flex; flex-direction: column; gap: 8px; margin: 16px 0 10px; text-align: left; }
+.onb-example { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); color: var(--text); font-weight: 500; text-align: left; }
+.onb-example small { flex: none; color: var(--accent); font-weight: 600; }
+.onb-list { text-align: left; margin: 12px 0 0; padding-left: 4px; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.onb-steps { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; text-align: left; }
+.onb-step { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; }
+.onb-step.is-done { opacity: .7; }
+.onb-check { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line-strong); color: #fff; font-size: 13px; font-weight: 700; }
+.onb-step.is-done .onb-check { background: #30a46c; border-color: #30a46c; }
+.onb-step-label { flex: 1; }
+.onb-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
+.onb-dots { display: flex; gap: 6px; }
+.onb-dot { width: 8px; height: 8px; padding: 0; border: 0; border-radius: 50%; background: var(--line-strong); }
+.onb-dot.is-active { background: var(--accent); width: 22px; border-radius: 4px; }
+.onb-foot .btn[hidden] { display: inline-block !important; visibility: hidden; }
+
+/* ---------- Неделя картинкой ---------- */
+.week-share { width: min(760px, calc(100vw - 24px)); }
+.ws-options { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 12px 0; }
+.ws-cats { display: flex; flex-wrap: wrap; gap: 4px 14px; width: 100%; }
+.ws-cats .check { padding: 2px 0; }
+.ws-preview { display: block; width: 100%; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 12px; background: #fff; }

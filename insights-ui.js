@@ -229,7 +229,14 @@ function renderSlots() {
         type: 'button',
         title: 'Новая задача с этим временем в «Когда делаю»',
         onclick: () => { $('#slotsDialog').close(); openTaskEditor(null, { plan: plan(s) }); },
-      }, '☑ Задача'));
+      }, '☑ Задача'),
+      // Общее окно с другом — сразу событие с приглашением ему
+      friend?.ownerId ? h('button', {
+        class: 'btn primary',
+        type: 'button',
+        title: `Создать событие и пригласить: ${friend.name}`,
+        onclick: () => { $('#slotsDialog').close(); openEditor({ preset: { date: s.key, start: fromMin(s.start), end: fromMin(s.end), invitees: [friend.ownerId] } }); },
+      }, `📨 Пригласить`) : null);
   }) : [h('div', { class: 'side-empty' }, `Нет свободных ${fmtDuration(q.duration)} подряд в этот период. Попробуйте другой период или меньше времени.`)]));
   const sleep = slotSleep();
   $('#slotHint').textContent = `${friend ? `Время, когда свободны вы и ${friend.name}. ` : ''}Не предлагаю время сна (${sleep[0]}–${sleep[1]}) и оставляю ${slotBuffer()} мин до и после других дел.`;

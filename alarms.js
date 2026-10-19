@@ -307,6 +307,6 @@ function describeReminder(r, now, tz) {
 if (typeof module !== 'undefined') {
   module.exports = {
     localParts, tzOffset, zonedMs, nextAlarm, nextEventAlarm, nextTaskAlarm,
-    alarmSig, refreshAlarm, dueAlarms, alarmText, spreadTimes, reminderFromParse, describeReminder, inQuiet,
+    alarmSig, refreshAlarm, dueAlarms, alarmText, spreadTimes, reminderFromParse, describeReminder, inQuiet, dayLabel, nextKey,
   };
 }

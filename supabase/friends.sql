@@ -27,34 +27,6 @@ create index if not exists shares_owner on public.shares (owner);
 create index if not exists shares_viewer on public.shares (viewer);
 create index if not exists shares_email on public.shares (lower(email));
 
--- Принять приглашение можно только самому приглашённому (через accept_share), а не владельцу
-create or replace function public.shares_guard() returns trigger
-language plpgsql as $$
-begin
-  if tg_op = 'INSERT' then
-    new.viewer := null;
-    new.accepted := false;
-  elsif coalesce(current_setting('app.accepting', true), '') <> 'on' then
-    new.owner := old.owner;
-    new.kind := old.kind;
-    new.viewer := old.viewer;
-    new.accepted := old.accepted;
-    new.token := old.token;
-    -- Поменяли адрес приглашения — оно снова ждёт принятия
-    if new.email is distinct from old.email then
-      new.viewer := null;
-      new.accepted := false;
-    end if;
-  end if;
-  new.email := lower(trim(new.email));
-  return new;
-end;
-$$;
-
-drop trigger if exists shares_guard on public.shares;
-create trigger shares_guard before insert or update on public.shares
-  for each row execute function public.shares_guard();
-
 alter table public.shares enable row level security;
 
 drop policy if exists "owner manages shares" on public.shares;
@@ -131,25 +103,96 @@ language sql stable security definer set search_path = public as $$
   where s.id = p_share and s.kind = 'friend' and s.accepted and s.viewer = auth.uid();
 $$;
 
--- Календарь по ссылке — любому, кто знает секретный адрес. Первая строка — имя владельца
-create or replace function public.link_items(p_token text)
-returns table (kind text, id text, data jsonb)
-language sql stable security definer set search_path = public as $$
-  select 'owner'::text, s.id::text, jsonb_build_object('name', s.owner_name)
-  from public.shares s
-  where s.token = p_token and s.kind = 'link'
-  union all
-  select p.kind, p.id, p.data
-  from public.shares s
-  cross join lateral public.share_project(s.owner, s.settings) p
-  where s.token = p_token and s.kind = 'link';
+-- Ссылки: срок действия, новая ссылка взамен старой, статистика открытий
+alter table public.shares add column if not exists expires_at timestamptz;
+alter table public.shares add column if not exists open_count integer not null default 0;
+alter table public.shares add column if not exists last_opened timestamptz;
+
+-- Принять приглашение может только приглашённый; секретный адрес и счётчик меняют только функции ниже
+create or replace function public.shares_guard() returns trigger
+language plpgsql as $$
+begin
+  if tg_op = 'INSERT' then
+    new.viewer := null;
+    new.accepted := false;
+    new.open_count := 0;
+    new.last_opened := null;
+  else
+    if coalesce(current_setting('app.accepting', true), '') <> 'on' then
+      new.owner := old.owner;
+      new.kind := old.kind;
+      new.viewer := old.viewer;
+      new.accepted := old.accepted;
+      if new.email is distinct from old.email then
+        new.viewer := null;
+        new.accepted := false;
+      end if;
+    end if;
+    if coalesce(current_setting('app.share_internal', true), '') <> 'on' then
+      new.token := old.token;
+      new.open_count := old.open_count;
+      new.last_opened := old.last_opened;
+    end if;
+  end if;
+  new.email := lower(trim(new.email));
+  return new;
+end;
 $$;
+
+-- Новая ссылка взамен старой: старая сразу перестаёт работать, настройки остаются
+create or replace function public.reissue_link(p_id uuid) returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  t text;
+begin
+  perform set_config('app.share_internal', 'on', true);
+  update public.shares sh
+     set token = replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''), open_count = 0, last_opened = null
+   where sh.id = p_id and sh.owner = auth.uid() and sh.kind = 'link'
+  returning sh.token into t;
+  if t is null then
+    raise exception 'link not found';
+  end if;
+  return t;
+end;
+$$;
+
+-- Календарь по ссылке: только пока ссылка не отозвана и не истекла. p_open — считать открытие
+drop function if exists public.link_items(text);
+create or replace function public.link_items(p_token text, p_open boolean default false)
+returns table (kind text, id text, data jsonb)
+language plpgsql security definer set search_path = public as $$
+declare
+  s public.shares;
+begin
+  select * into s from public.shares sh
+   where sh.token = p_token and sh.kind = 'link' and (sh.expires_at is null or sh.expires_at > now());
+  if not found then
+    return;
+  end if;
+  if p_open then
+    perform set_config('app.share_internal', 'on', true);
+    update public.shares sh set open_count = sh.open_count + 1, last_opened = now() where sh.id = s.id;
+  end if;
+  return query
+    select 'owner'::text, s.id::text, jsonb_build_object('name', s.owner_name)
+    union all
+    select p.kind, p.id, p.data from public.share_project(s.owner, s.settings) p;
+end;
+$$;
+
+revoke all on function public.reissue_link(uuid) from public, anon;
+revoke all on function public.link_items(text, boolean) from public;
+grant execute on function public.reissue_link(uuid) to authenticated;
+grant execute on function public.link_items(text, boolean) to anon, authenticated;
+
+drop trigger if exists shares_guard on public.shares;
+create trigger shares_guard before insert or update on public.shares
+  for each row execute function public.shares_guard();
 
 -- share_project отдаёт данные любого пользователя — вызывать её снаружи нельзя, только из функций выше
 revoke all on function public.share_project(uuid, jsonb) from public, anon, authenticated;
 revoke all on function public.accept_share(uuid) from public, anon;
 revoke all on function public.friend_items(uuid) from public, anon;
-revoke all on function public.link_items(text) from public;
 grant execute on function public.accept_share(uuid) to authenticated;
 grant execute on function public.friend_items(uuid) to authenticated;
-grant execute on function public.link_items(text) to anon, authenticated;
