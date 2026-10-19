@@ -268,7 +268,8 @@ function reminderFromParse(p, { now, tz, quiet = DEFAULT_QUIET, dueKey = null, d
   for (const hm of p.times || []) at.push(zonedMs(day, hm, tz));
   if (p.inMinutes) at.push(now + p.inMinutes * MINUTE);
   if (p.count) at.push(...spreadTimes(p.count, day, dueTime, now, tz));
-  const every = p.every || (p.nag ? 60 : null);
+  // «напомни в 13:20, повторяй» — повторять через 15 минут после первого напоминания; просто «пока не сделаю» — каждый час
+  const every = p.every || (p.nag ? (at.length === 1 ? 15 : 60) : null);
   // «напомни позвонить маме в 18» — ровно в 18, а не за час
   if (p.remindWord && !every && !at.length && dueTime) at.push(zonedMs(day, dueTime, tz));
   if (!at.length && !every) return null;
@@ -276,7 +277,8 @@ function reminderFromParse(p, { now, tz, quiet = DEFAULT_QUIET, dueKey = null, d
   return normalizeReminder({
     at: at.map(iso),
     every,
-    from: iso(now),
+    // Повтор начинается с первого названного напоминания, а не с момента, когда задачу записали
+    from: iso(every && at.length ? Math.min(...at) : now),
     window: p.window || null,
     until: every && deadline ? iso(deadline) : null,
     keepAfter: Boolean(every && deadline),

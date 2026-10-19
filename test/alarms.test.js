@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 // alarms.js, как в браузере, пользуется функциями core.js как глобальными
 Object.assign(globalThis, require('../core.js'));
 const a = require('../alarms.js');
-const { normalizeEvent, normalizeTask, parseQuick } = require('../core.js');
+const { normalizeEvent, normalizeTask, parseQuick, fromKey } = require('../core.js');
 
 const TZ = 'Europe/Moscow'; // UTC+3, без перевода часов
 const at = (key, hm, tz = TZ) => a.zonedMs(key, hm, tz);
@@ -173,4 +173,23 @@ test('«когда делаю»: напоминание в начале блок
   // Блок изменили — расписание пересчитывается
   const sig = a.alarmSig('task', task);
   assert.notEqual(a.alarmSig('task', { ...task, plan: { ...task.plan, start: '20:00' } }), sig);
+});
+
+test('«в 13:30 созвон, напомни в 13:20, повторяй, пока я не отмечу» — не раньше 13:20', () => {
+  Object.assign(globalThis, a);
+  const { phraseToItem } = require('../phrase.js');
+  const now = at('2026-10-19', '09:00');
+  const x = phraseToItem('В 13:30 созвон по работе, напомни в 13:20, повторяй, пока я не отмечу, что сделал.', { now, tz: TZ, newId: () => 'id' });
+  assert.equal(x.kind, 'task');
+  assert.equal(x.item.title, 'Созвон по работе');
+  assert.deepEqual([x.item.due, x.item.time], ['2026-10-19', '13:30']);
+  const task = normalizeTask(x.item);
+  const seq = [];
+  for (let t = now, i = 0; i < 4; i++) { t = a.nextAlarm('task', task, t, TZ); seq.push(show(t).slice(11)); }
+  assert.deepEqual(seq, ['13:20', '13:30', '14:30', '15:30']);
+  // Без своего времени «пока не сделаю» — как раньше, каждый час
+  const nag = parseQuick('купить хлеб, напоминай, пока я не скажу, что сделал', fromKey('2026-10-19'));
+  assert.deepEqual([nag.title, nag.nag], ['Купить хлеб', true]);
+  const oven = parseQuick('проверить духовку через 30 минут, повторяй', fromKey('2026-10-19'));
+  assert.deepEqual([oven.title, oven.inMinutes, oven.nag], ['Проверить духовку', 30, true]);
 });

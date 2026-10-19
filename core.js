@@ -218,7 +218,8 @@ function parseQuick(input, base = today()) {
     if (u.startsWith('д') || u.startsWith('сут')) return (n || 1) * 1440;
     return n || 1;
   };
-  take(',? ?пока не (?:сделаю|скажу|отмечу|выполню)', () => { r.nag = true; });
+  // «пока не сделаю», «повторяй, пока я не отмечу, что сделал», «напоминай, пока не скажу»
+  take(',? ?(?:(?:и )?(?:повторяй|напоминай|напоминать)(?: мне)?,? ?)?пока (?:я )?не (?:сделаю|скажу|отмечу|выполню|нажму)(?:,? что (?:сделал[аио]?|выполнил[аио]?|готово))?', () => { r.nag = true; });
   take(`${REMIND}(?:каждые|каждый|каждую|раз в) (?:(\\d+) )?(минут[уы]?|мин|час(?:а|ов)?|ч|полчаса)`, (m) => {
     r.every = Math.max(5, unitMinutes(m[1] ? +m[1] : 0, m[2]));
   });
@@ -246,10 +247,19 @@ function parseQuick(input, base = today()) {
     if (times.some(([hh, mm]) => hh > 23 || mm > 59)) return false;
     r.times = [...new Set(times.map(([hh, mm]) => `${pad(hh)}:${pad(mm)}`))].sort();
   });
+  // «напомни в 13:20» — одно время напоминания (несколько — правило выше)
+  take(`(?:напомни(?:ть)?|напоминай|напоминание)(?: мне)? в (${T})`, (m) => {
+    const [hh, mm = '0'] = m[1].split(':');
+    if (+hh > 23 || +mm > 59) return false;
+    r.times = [`${pad(+hh)}:${pad(+mm)}`];
+    r.remindWord = true;
+  });
   take('через (?:(\\d+) )?(минут[уы]?|мин|час(?:а|ов)?|полчаса)', (m) => {
     r.inMinutes = unitMinutes(m[1] ? +m[1] : 0, m[2]);
   });
   take('напомни(?:ть)?(?: мне)?|напоминай|напоминать', () => { r.remindWord = true; });
+  // «…, повторяй» без интервала — напоминать, пока не отмечу
+  if (r.remindWord || r.times || r.inMinutes) take(',? ?(?:и )?повторяй(?: напоминание)?', () => { r.nag = true; });
 
   // Повторы
   take('каждый день|ежедневно', () => { r.repeat = 'daily'; });
@@ -389,9 +399,12 @@ function parseQuick(input, base = today()) {
   if (r.start && r.end && toMin(r.end) <= toMin(r.start)) r.end = fromMin(toMin(r.start) + 60);
 
   let title = s.replace(/\s+/g, ' ').trim()
+    // Остатки от вырезанных частей: «созвон , , .» → «созвон»
+    .replace(/\s+([,.;])/g, '$1')
+    .replace(/([,;])(?:\s*[,;.])+/g, '$1')
     .replace(/^(?:в|во|на|к|до|с|со|по)\s+/i, '')
     .replace(/[\s,]+(?:в|во|на|к|до|с|со|по)$/i, '')
-    .replace(/^[,.\s-]+|[,\s-]+$/g, '');
+    .replace(/^[,.\s-]+|[,;.\s-]+$/g, '');
   r.title = title ? title[0].toUpperCase() + title.slice(1) : '';
   return r;
 }
