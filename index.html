@@ -17,6 +17,7 @@
   <script src="config.js" defer></script>
   <script src="sync.js" defer></script>
   <script src="tasks.js" defer></script>
+  <script src="remind-editor.js" defer></script>
   <script src="reminders-ui.js" defer></script>
   <script src="overlays.js" defer></script>
   <script src="insights-ui.js" defer></script>
@@ -158,8 +159,8 @@
 
       <label class="check pin-check"><input type="checkbox" id="fPin"> 📌 Обратный отсчёт — показывать сверху «До … N дней»</label>
 
-      <div class="field"><span>Напомнить</span>
-        <div class="remind-chips" id="fReminds" role="group" aria-label="За сколько напомнить"></div>
+      <div class="field remind-box"><span>🔔 Напоминания</span>
+        <div id="fRemind"></div>
       </div>
 
       <div class="field"><span>Календарь</span>
@@ -250,29 +251,8 @@
       <label class="check"><input type="checkbox" id="tPriority"> Важная задача</label>
 
       <div class="field remind-box">
-        <span>Напоминания</span>
-        <div class="remind-chips" id="tAtList"></div>
-        <div class="remind-add">
-          <input type="datetime-local" id="tAtInput" step="300" aria-label="Когда напомнить">
-          <button type="button" class="btn" id="tAtAdd">Добавить</button>
-        </div>
-        <div class="field-row">
-          <label class="field"><span>Повторять, пока не сделано</span>
-            <select id="tEvery">
-              <option value="">Не повторять</option>
-              <option value="15">Каждые 15 минут</option>
-              <option value="30">Каждые 30 минут</option>
-              <option value="60">Каждый час</option>
-              <option value="120">Каждые 2 часа</option>
-              <option value="180">Каждые 3 часа</option>
-              <option value="240">Каждые 4 часа</option>
-            </select>
-          </label>
-          <div class="field" id="tWindowWrap"><span>Только в эти часы</span>
-            <div class="time-pair"><input type="time" id="tWinFrom" aria-label="С"><span>–</span><input type="time" id="tWinTo" aria-label="До"></div>
-          </div>
-        </div>
-        <p class="muted task-hint" id="tRemindHint"></p>
+        <span>🔔 Напоминания</span>
+        <div id="tRemind"></div>
       </div>
 
       <label class="field"><span>Заметки</span><textarea id="tNotes" rows="3" placeholder="Детали, ссылки, подзадачи…"></textarea></label>

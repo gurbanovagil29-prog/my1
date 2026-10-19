@@ -1366,3 +1366,14 @@ a.btn.primary { color: var(--accent-text); }
 .sn-mode.is-active { border-color: var(--accent); background: var(--accent-soft); }
 .sn-preview { margin: 0; font-weight: 600; color: var(--accent); }
 #snTitle { margin: -6px 0 0; }
+
+/* ---------- Раздел «Напоминания» ---------- */
+.remind-summary { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--accent-soft); color: var(--text); font-weight: 500; line-height: 1.35; }
+.remind-sub { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.remind-sub > small { color: var(--muted); font-weight: 600; font-size: 12px; }
+.remind-sub select { width: 100%; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); }
+.remind-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: 14px; }
+.remind-row input, .remind-row select { flex: 1 1 90px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); width: auto; }
+.remind-row input[type="number"] { flex: 0 1 80px; }
+.remind-more summary { cursor: pointer; color: var(--accent); font-size: 13px; padding: 4px 0; }
+.remind-chip:disabled { opacity: .45; }

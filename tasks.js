@@ -549,7 +549,7 @@ function taskEditorDraft() {
   const due = eventId ? null : ($('#tDue').value || ($('#tTime').value ? toKey(today()) : null));
   const time = eventId ? null : ($('#tTime').value || null);
   const dl = eventId ? deadlineOf({ eventId, eventKey: eventKey || null }) : (due ? { date: due, time } : null);
-  return { due: dl?.date || null, time: dl?.time || null, eventId: eventId || null, plan: editorPlan(), reminder: buildTaskReminder(dl) };
+  return { due: dl?.date || null, time: dl?.time || null, eventId: eventId || null, plan: editorPlan(), reminder: buildTaskReminder() };
 }
 
 function initTasks() {

@@ -8,7 +8,7 @@
    taskBadgeCount, openTaskEditor, initTasks, renderEvTasks, commitPendingTasks, compareTasks,
    syncSoon, initSync, openSyncDialog, renderSyncStatus,
    refreshAlarms, runLocalAlarms, enableReminders, notifyStatusText, quietLabel, initReminders, initTaskReminderFields,
-   setEditorReminds, editorReminds, reminderFromParse, describeReminder, userTz, quietHours, iso,
+   setEditorReminds, editorReminds, editorRemindAt, refreshEventReminds, reminderFromParse, describeReminder, userTz, quietHours, iso,
    plansByDay, planBlock, planChip, movePlan, planLabel, syncLinkedTaskDeadlines, mentionTargets, mentionSlug, normalizePlan, deadlineHint,
    upcomingOccurrences, scheduleOverlays, initOverlays, isDailySpan,
    layerCal, visibleLayerEvents, openFriendEvent, renderFriends, layerChips, initFriends, findConflicts,
@@ -1183,7 +1183,7 @@ function openEditor({ ev = null, key = null, preset = {} } = {}) {
   f.end.value = v.start ? fromMin(endMinutes(v)) : '10:00';
   f.repeat.value = v.repeat;
   f.until.value = v.until || '';
-  setEditorReminds(v.reminds || []);
+  setEditorReminds(v.reminds || [], v.remindAt || [], () => ({ ...readEditor(), id: editing?.id || 'draft', exdates: v.exdates || [] }));
   f.notes.value = v.notes || '';
   f.pin.checked = Boolean(v.pin);
   pickedCal = calOf(v).id;
@@ -1220,6 +1220,7 @@ function readEditor() {
     until: repeat !== 'none' && f.until.value ? f.until.value : null,
     cal: pickedCal,
     reminds: editorReminds(),
+    remindAt: editorRemindAt(),
     notes: f.notes.value.trim(),
     pin: f.pin.checked,
   };
@@ -1268,7 +1269,10 @@ function updateEditorConflicts() {
   $('#fConflict').textContent = text;
   $('#fConflict').hidden = !text;
 }
-for (const el of [f.date, f.endDate, f.start, f.end, f.allDay, f.repeat]) el.addEventListener('change', updateEditorConflicts);
+for (const el of [f.date, f.endDate, f.start, f.end, f.allDay, f.repeat]) {
+  el.addEventListener('change', updateEditorConflicts);
+  el.addEventListener('change', () => refreshEventReminds()); // «Напомню: …» считается от нового времени
+}
 f.start.addEventListener('input', updateEditorConflicts);
 f.end.addEventListener('input', updateEditorConflicts);
 
