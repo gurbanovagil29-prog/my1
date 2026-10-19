@@ -12,7 +12,7 @@
 
 /* global state, h, $, readJSON, writeJSON, toast, closeNav, sync, saveEvents, saveTasks, saveSettings, findEvent, findTask,
    colorOf, toggleTask, refreshAlarm, dueAlarms, alarmText, zonedMs, localParts, normalizeReminder, iso, DEFAULT_QUIET,
-   describeReminder, nextAlarm, STORE_KEY, TASKS_KEY, renderFooter */
+   describeReminder, nextAlarm, STORE_KEY, TASKS_KEY, renderFooter, dayLabel, $$ */
 
 const ALARM_ACK_KEY = 'everyday-calendar:alarm-ack';
 const REMIND_OPTIONS = [[0, 'В начале'], [5, '5 мин'], [10, '10 мин'], [15, '15 мин'], [30, '30 мин'], [60, '1 час'], [120, '2 часа'], [1440, 'За день']];
@@ -119,13 +119,20 @@ function showMissedAlarms() {
 }
 
 function snoozeAlarm(kind, id, minutes) {
-  const item = findItem(kind, id);
-  if (!item) return;
   const tz = userTz();
   const now = Date.now();
   const until = minutes === 'morning'
     ? zonedMs(localParts(now + 86400000, tz).key, '09:00', tz)
     : now + minutes * 60000;
+  snoozeUntil(kind, id, until);
+}
+
+/** Отложить напоминание до момента until (мс). */
+function snoozeUntil(kind, id, until) {
+  const item = findItem(kind, id);
+  if (!item) return;
+  const tz = userTz();
+  const now = Date.now();
   if (kind === 'task') {
     item.reminder = normalizeReminder({ ...(item.reminder || { at: [] }), snooze: iso(until), quiet: quietHours(), tz });
     saveTasks();
@@ -134,7 +141,104 @@ function snoozeAlarm(kind, id, minutes) {
     saveEvents();
   }
   acknowledge(kind, id);
-  toast(`Напомню ${minutes === 'morning' ? 'завтра в 9:00' : `в ${localParts(until, tz).hm}`}`);
+  toast(`Напомню ${whenLabel(until, now, tz)}`);
+}
+
+/** «в 17:30», «завтра в 09:00», «пт, 23 окт в 10:00». */
+function whenLabel(ms, now, tz) {
+  const p = localParts(ms, tz);
+  const day = p.key === localParts(now, tz).key ? '' : `${dayLabel(p.key, now, tz)} `;
+  return `${day}в ${p.hm}`;
+}
+
+/* ---------- «⏰ Другое…»: напомнить через сколько угодно или в точное время ---------- */
+
+let snoozeTarget = null;
+let snoozeMode = 'in';
+
+/** Варианты-кнопки: последний свой выбор, 5/10/30 мин, 2/3 часа, вечером в 19:00. */
+function snoozeQuickOptions(now, tz) {
+  const opts = [];
+  const last = state.settings.lastSnooze;
+  const nextAt = (hm) => {
+    const key = localParts(now, tz).key;
+    const t = zonedMs(key, hm, tz);
+    return t > now + 60000 ? t : zonedMs(localParts(now + 86400000, tz).key, hm, tz);
+  };
+  if (last?.in) opts.push({ label: `⭐ Через ${minutesLabel(last.in)}`, until: now + last.in * 60000 });
+  if (last?.at) opts.push({ label: `⭐ ${capitalizeFirst(whenLabel(nextAt(last.at), now, tz))}`, until: nextAt(last.at) });
+  for (const m of [5, 10, 30, 120, 180]) if (m !== last?.in) opts.push({ label: `Через ${minutesLabel(m)}`, until: now + m * 60000 });
+  if (localParts(now, tz).hm < '18:30' && last?.at !== '19:00') opts.push({ label: 'Вечером в 19:00', until: nextAt('19:00') });
+  return opts;
+}
+
+const capitalizeFirst = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+function minutesLabel(m) {
+  if (m % 1440 === 0) return m === 1440 ? 'день' : `${m / 1440} дн.`;
+  if (m % 60 === 0) return m === 60 ? 'час' : `${m / 60} ч`;
+  return `${m} мин`;
+}
+
+function openSnoozePicker(kind, id) {
+  const item = findItem(kind, id);
+  if (!item) return;
+  snoozeTarget = { kind, id };
+  const tz = userTz();
+  const now = Date.now();
+  $('#snTitle').textContent = item.title;
+  $('#snQuick').replaceChildren(...snoozeQuickOptions(now, tz).map((o) => h('button', {
+    class: 'remind-chip', type: 'button',
+    onclick: () => { $('#snoozeDialog').close(); snoozeUntil(kind, id, o.until); },
+  }, o.label)));
+  const inHour = localParts(now + 60 * 60000, tz);
+  $('#snDate').value = inHour.key;
+  $('#snDate').min = localParts(now, tz).key;
+  $('#snTime').value = `${inHour.hm.slice(0, 3)}${inHour.hm.slice(3) < '30' ? '00' : '30'}`;
+  snoozeMode = 'in';
+  updateSnoozePreview();
+  $('#snoozeDialog').showModal();
+}
+
+/** Когда напомним по введённому: «через N» или «точно в». */
+function snoozePickerUntil() {
+  const now = Date.now();
+  if (snoozeMode === 'at') {
+    if (!$('#snDate').value || !$('#snTime').value) return null;
+    const tz = userTz();
+    const t = zonedMs($('#snDate').value, $('#snTime').value, tz);
+    // Сегодня это время уже прошло — значит, завтра
+    if (t <= now && $('#snDate').value === localParts(now, tz).key) return zonedMs(localParts(now + 86400000, tz).key, $('#snTime').value, tz);
+    return t;
+  }
+  const n = +$('#snNum').value;
+  return n > 0 ? now + Math.round(n * +$('#snUnit').value) * 60000 : null;
+}
+
+function updateSnoozePreview() {
+  for (const el of $$('#snoozeForm .sn-mode')) el.classList.toggle('is-active', el.dataset.mode === snoozeMode);
+  const until = snoozePickerUntil();
+  const now = Date.now();
+  const ok = until && until > now + 30000 && until - now <= 30 * 86400000;
+  $('#snPreview').textContent = ok ? `Напомню ${whenLabel(until, now, userTz())}` : 'Выберите время в будущем (не дальше 30 дней)';
+  $('#snSubmit').disabled = !ok;
+}
+
+function initSnoozePicker() {
+  for (const el of [$('#snNum'), $('#snUnit')]) el.addEventListener('input', () => { snoozeMode = 'in'; updateSnoozePreview(); });
+  for (const el of [$('#snDate'), $('#snTime')]) el.addEventListener('input', () => { snoozeMode = 'at'; updateSnoozePreview(); });
+  for (const el of $$('#snoozeForm .sn-mode')) el.addEventListener('click', () => { snoozeMode = el.dataset.mode; updateSnoozePreview(); });
+  $('#snoozeForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const until = snoozePickerUntil();
+    if (!until || !snoozeTarget) return;
+    // Запоминаем свой вариант — в следующий раз он будет первым
+    state.settings.lastSnooze = snoozeMode === 'at'
+      ? { at: $('#snTime').value }
+      : { in: Math.round(+$('#snNum').value * +$('#snUnit').value) };
+    saveSettings();
+    $('#snoozeDialog').close();
+    snoozeUntil(snoozeTarget.kind, snoozeTarget.id, until);
+  });
 }
 
 function renderAlarmBar() {
@@ -158,7 +262,8 @@ function renderAlarmBar() {
         a.kind === 'task'
           ? h('button', { class: 'btn primary small', type: 'button', onclick: () => { acknowledge(a.kind, a.id); toggleTask(a.id); } }, '✓ Сделал')
           : null,
-        later('Через 15 мин', 15), later('Через час', 60), later('Завтра утром', 'morning'))));
+        later('Через 15 мин', 15), later('Через час', 60), later('Завтра утром', 'morning'),
+        h('button', { class: 'btn small', type: 'button', onclick: () => openSnoozePicker(a.kind, a.id) }, '⏰ Другое…'))));
   }
   bar.replaceChildren(...cards);
   bar.hidden = !cards.length;
@@ -327,6 +432,7 @@ function applyAlarmAction(action, kind, id) {
 }
 
 function initReminders() {
+  initSnoozePicker();
   $('#btnPushTest').addEventListener('click', testPush);
   navigator.serviceWorker?.addEventListener('message', (e) => {
     const m = e.data || {};

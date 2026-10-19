@@ -431,6 +431,31 @@
     <p class="fe-notes" id="feNotes"></p>
   </dialog>
 
+  <dialog class="dialog" id="snoozeDialog">
+    <form id="snoozeForm" method="dialog">
+      <div class="dialog-head">
+        <h2>⏰ Когда напомнить?</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+      </div>
+      <p class="muted" id="snTitle"></p>
+      <div class="remind-chips" id="snQuick"></div>
+      <div class="field sn-mode" data-mode="in"><span>Через</span>
+        <div class="sn-row">
+          <input type="number" id="snNum" min="1" max="999" step="1" inputmode="numeric" value="40">
+          <select id="snUnit"><option value="1">минут</option><option value="60">часов</option><option value="1440">дней</option></select>
+        </div>
+      </div>
+      <div class="field sn-mode" data-mode="at"><span>Или точно</span>
+        <div class="sn-row"><input type="date" id="snDate"><input type="time" id="snTime" step="300"></div>
+      </div>
+      <p class="sn-preview" id="snPreview"></p>
+      <div class="dialog-foot"><span class="spacer"></span>
+        <button type="button" class="btn" data-close>Отмена</button>
+        <button type="submit" class="btn primary" id="snSubmit">Напомнить</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog class="dialog" id="inviteCard">
     <div class="dialog-head">
       <h2 id="icTitle"></h2>

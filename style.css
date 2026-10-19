@@ -1358,3 +1358,11 @@ a.btn.primary { color: var(--accent-text); }
 .ws-cats { display: flex; flex-wrap: wrap; gap: 4px 14px; width: 100%; }
 .ws-cats .check { padding: 2px 0; }
 .ws-preview { display: block; width: 100%; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 12px; background: #fff; }
+
+/* ---------- «Когда напомнить?» ---------- */
+.sn-row { display: flex; gap: 8px; }
+.sn-row input, .sn-row select { flex: 1; min-width: 0; }
+.sn-mode { padding: 8px 10px; border: 1px solid transparent; border-radius: 12px; cursor: pointer; }
+.sn-mode.is-active { border-color: var(--accent); background: var(--accent-soft); }
+.sn-preview { margin: 0; font-weight: 600; color: var(--accent); }
+#snTitle { margin: -6px 0 0; }

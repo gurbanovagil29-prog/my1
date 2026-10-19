@@ -960,7 +960,7 @@ if (typeof module !== 'undefined') {
  */
 
 /* global parseQuick, normalizePlan, collect, addDays, fromKey, toKey, toMin, localParts, zonedMs, reminderFromParse,
-   describeReminder, dayLabel, DEFAULT_QUIET, endMinutes, fromMin */
+   describeReminder, dayLabel, DEFAULT_QUIET, endMinutes, fromMin, nextKey */
 
 const PHRASE_TASK_PREFIX = /^\s*(?:задача|todo|\[\s?\])\s*[:\-–]?\s*/i;
 const phraseNorm = (t) => String(t).toLowerCase().replace(/ё/g, 'е');
@@ -1074,8 +1074,31 @@ function describePhraseItem({ kind, item, cal, linkTitle }, now, tz, calName) {
   return parts.join(' · ');
 }
 
+/**
+ * «Когда напомнить?» — ответ словами: «через 40 минут», «в 17:30», «завтра в 9», «40».
+ * Возвращает момент (мс) в будущем или null, если не понятно.
+ */
+function snoozeFromText(text, now, tz) {
+  const raw = String(text || '').trim();
+  const todayKey = localParts(now, tz).key;
+  const bare = raw.match(/^(\d{1,3})\s*(?:м|мин|минут[уы]?)?$/i);
+  if (bare && +bare[1] > 0) return now + +bare[1] * 60000;
+  const short = raw.match(/^(\d{1,3})\s*(ч|час(?:а|ов)?|д|дн(?:я|ей)?|день)$/i);
+  if (short && +short[1] > 0) return now + +short[1] * (/^д/i.test(short[2]) ? 1440 : 60) * 60000;
+  const r = parseQuick(` ${raw} `, fromKey(todayKey));
+  if (r.inMinutes) return now + r.inMinutes * 60000;
+  if (r.date || r.start) {
+    const key = r.date ? toKey(r.date) : todayKey;
+    let at = zonedMs(key, r.start || '09:00', tz);
+    // «в 9», а 9 уже прошло — значит завтра
+    if (!r.date && at <= now) at = zonedMs(nextKey(todayKey), r.start, tz);
+    return at > now ? at : null;
+  }
+  return null;
+}
+
 if (typeof module !== 'undefined') {
-  module.exports = { phraseToItem, describePhraseItem, calendarByTag, phraseMentionMatches };
+  module.exports = { phraseToItem, describePhraseItem, calendarByTag, phraseMentionMatches, snoozeFromText };
 }
 
 // ===== reminder-server.js =====
@@ -1103,7 +1126,7 @@ if (typeof module !== 'undefined') {
  */
 
 /* global dueAlarms, nextAlarm, alarmText, generateVapidKeys, hmacSha256, b64url, iso, localParts, dayLabel, refreshAlarm,
-   digestMessage, dayAgenda, agendaLine, phraseToItem, describePhraseItem, nextKey, DEFAULT_QUIET */
+   digestMessage, dayAgenda, agendaLine, phraseToItem, describePhraseItem, nextKey, DEFAULT_QUIET, snoozeFromText */
 
 const ACTION_SNOOZE_MAX = 7 * 24 * 60;
 
@@ -1173,7 +1196,7 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
             ...(row.kind === 'task' ? [{ text: '✓ Сделал', callback_data: `d:${row.id}` }] : []),
             { text: 'Через 15 мин', callback_data: `s:${short}:${row.id}` },
             { text: 'Через час', callback_data: `h:${short}:${row.id}` },
-          ]],
+          ], [{ text: '⏰ Другое время', callback_data: `o:${short}:${row.id}` }]],
         },
       });
     }
@@ -1380,9 +1403,10 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
 
   /* ---------- Telegram-бот ---------- */
 
-  const send = (chatId, text, buttons = null) => telegram.call('sendMessage', {
+  const send = (chatId, text, buttons = null, forceReply = false) => telegram.call('sendMessage', {
     chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true,
     ...(buttons ? { reply_markup: { inline_keyboard: buttons } } : {}),
+    ...(forceReply ? { reply_markup: { force_reply: true, input_field_placeholder: 'через 40 минут / в 17:30' } } : {}),
   });
 
   const HELP = [
@@ -1417,6 +1441,17 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
     if (!link) return send(chatId, 'Чтобы подключить бота, откройте календарь → ☰ → «Telegram» → «Подключить».');
     const user = link.user_id;
     const tz = (await contacts([user])).tzOf(user);
+    // Ответ на «⏰ Когда напомнить?» — в вопросе спрятана ссылка с тем, что откладываем
+    const ref = (msg.reply_to_message?.entities || []).map((e) => e.url || '').find((u) => u.includes('snooze='));
+    if (ref) {
+      const [short, id] = ref.split('snooze=')[1].split(':');
+      const until = snoozeFromText(text, t, tz);
+      if (!until) return send(chatId, '🤔 Не понял время. Напишите, например: «через 40 минут», «в 17:30» или «завтра в 9».');
+      const res = await applyAction(user, short === 't' ? 'task' : 'event', id, 'snooze', Math.ceil((until - t) / 60000));
+      if (res.status !== 200) return send(chatId, 'Не нашёл это напоминание — возможно, его уже удалили.');
+      const p = localParts(until, tz);
+      return send(chatId, `⏰ Напомню ${dayLabel(p.key, t, tz)} в ${p.hm}`);
+    }
     const today = localParts(t, tz).key;
     const cmd = text.toLowerCase().replace(/@\w+$/, '');
     if (/^\/(start|help)$|^помощь$/.test(cmd)) return send(chatId, HELP);
@@ -1452,6 +1487,13 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
       else if (op === 's' || op === 'h') {
         const m = op === 's' ? 15 : 60;
         note = (await applyAction(user, type, b, 'snooze', m)).status === 200 ? `Напомню через ${m === 15 ? '15 минут' : 'час'}` : 'Не найдено';
+      } else if (op === 'o') {
+        const row = await db.getItem(user, type, b);
+        if (!row) note = 'Не найдено';
+        else {
+          note = 'Когда напомнить?';
+          await send(chatId, `⏰ Когда напомнить «${tgEscape(row.data?.title || '')}»?<a href="https://t.me/?snooze=${a}:${b}">\u200b</a>\nОтветьте на это сообщение: «через 40 минут», «в 17:30», «завтра в 9».`, null, true);
+        }
       } else if (op === 'u') {
         await db.deleteItem(user, type, b);
         note = 'Отменено, удалил';
@@ -1462,7 +1504,7 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
       }
     }
     await telegram.call('answerCallbackQuery', { callback_query_id: cb.id, text: note }).catch(() => {});
-    if (cb.message) {
+    if (cb.message && !String(cb.data || '').startsWith('o:')) {
       await telegram.call('editMessageText', {
         chat_id: chatId, message_id: cb.message.message_id, text: `${cb.message.text || ''}\n\n${note}`,
       }).catch(() => {});

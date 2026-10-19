@@ -8,7 +8,7 @@
  */
 
 /* global parseQuick, normalizePlan, collect, addDays, fromKey, toKey, toMin, localParts, zonedMs, reminderFromParse,
-   describeReminder, dayLabel, DEFAULT_QUIET, endMinutes, fromMin */
+   describeReminder, dayLabel, DEFAULT_QUIET, endMinutes, fromMin, nextKey */
 
 const PHRASE_TASK_PREFIX = /^\s*(?:задача|todo|\[\s?\])\s*[:\-–]?\s*/i;
 const phraseNorm = (t) => String(t).toLowerCase().replace(/ё/g, 'е');
@@ -122,6 +122,29 @@ function describePhraseItem({ kind, item, cal, linkTitle }, now, tz, calName) {
   return parts.join(' · ');
 }
 
+/**
+ * «Когда напомнить?» — ответ словами: «через 40 минут», «в 17:30», «завтра в 9», «40».
+ * Возвращает момент (мс) в будущем или null, если не понятно.
+ */
+function snoozeFromText(text, now, tz) {
+  const raw = String(text || '').trim();
+  const todayKey = localParts(now, tz).key;
+  const bare = raw.match(/^(\d{1,3})\s*(?:м|мин|минут[уы]?)?$/i);
+  if (bare && +bare[1] > 0) return now + +bare[1] * 60000;
+  const short = raw.match(/^(\d{1,3})\s*(ч|час(?:а|ов)?|д|дн(?:я|ей)?|день)$/i);
+  if (short && +short[1] > 0) return now + +short[1] * (/^д/i.test(short[2]) ? 1440 : 60) * 60000;
+  const r = parseQuick(` ${raw} `, fromKey(todayKey));
+  if (r.inMinutes) return now + r.inMinutes * 60000;
+  if (r.date || r.start) {
+    const key = r.date ? toKey(r.date) : todayKey;
+    let at = zonedMs(key, r.start || '09:00', tz);
+    // «в 9», а 9 уже прошло — значит завтра
+    if (!r.date && at <= now) at = zonedMs(nextKey(todayKey), r.start, tz);
+    return at > now ? at : null;
+  }
+  return null;
+}
+
 if (typeof module !== 'undefined') {
-  module.exports = { phraseToItem, describePhraseItem, calendarByTag, phraseMentionMatches };
+  module.exports = { phraseToItem, describePhraseItem, calendarByTag, phraseMentionMatches, snoozeFromText };
 }

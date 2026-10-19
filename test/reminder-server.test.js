@@ -296,3 +296,33 @@ test('утренняя сводка: в своё время, один раз в 
   await server.tick();
   assert.equal(pushes.length, 2);
 });
+
+test('«⏰ Другое время»: бот спрашивает и понимает ответ словами', async () => {
+  const { snoozeFromText } = require('../phrase.js');
+  const now = at('2026-10-19', '12:42');
+  const hm = (ms) => require('../alarms.js').localParts(ms, TZ);
+  assert.equal(hm(snoozeFromText('через 40 минут', now, TZ)).hm, '13:22');
+  assert.equal(hm(snoozeFromText('в 17:30', now, TZ)).hm, '17:30');
+  assert.equal(hm(snoozeFromText('17:30', now, TZ)).hm, '17:30');
+  assert.deepEqual([hm(snoozeFromText('завтра в 9', now, TZ)).key, hm(snoozeFromText('завтра в 9', now, TZ)).hm], ['2026-10-20', '09:00']);
+  assert.equal(hm(snoozeFromText('в 9', now, TZ)).key, '2026-10-20', '9 утра уже прошло — завтра');
+  assert.equal(hm(snoozeFromText('40', now, TZ)).hm, '13:22');
+  assert.equal(hm(snoozeFromText('2 часа', now, TZ)).hm, '14:42');
+  assert.equal(snoozeFromText('когда-нибудь', now, TZ), null);
+
+  const env = setupFull(now);
+  const { db } = env;
+  const tg = [];
+  const server = createReminderServer({ db, push: async () => ({ ok: true, status: 201 }), now: () => now, actionUrl: 'x', subject: 's', telegram: { async call(m, p) { tg.push({ method: m, ...p }); return true; } } });
+  db.links.push({ user_id: 'u1', chat_id: 7, mode: 'both' });
+  db.prefs.push({ user_id: 'u1', tz: TZ, digest_time: null });
+  db.put('u1', 'task', normalizeTask({ id: 'call', title: 'Созвон', due: '2026-10-19', time: '13:30' }));
+  await server.telegramUpdate({ callback_query: { id: 'q', data: 'o:t:call', message: { chat: { id: 7 }, message_id: 1, text: 'x' } } });
+  const ask = tg.find((x) => x.method === 'sendMessage');
+  assert.match(ask.text, /Когда напомнить «Созвон»/);
+  assert.equal(ask.reply_markup.force_reply, true);
+  const url = ask.text.match(/href="([^"]+)"/)[1];
+  await server.telegramUpdate({ message: { chat: { id: 7 }, text: 'в 17:30', reply_to_message: { text: 'x', entities: [{ type: 'text_link', url }] } } });
+  assert.equal(tg.at(-1).text, '⏰ Напомню сегодня в 17:30');
+  assert.equal(hm(Date.parse(db.get('u1', 'task', 'call').reminder.snooze)).hm, '17:30');
+});
