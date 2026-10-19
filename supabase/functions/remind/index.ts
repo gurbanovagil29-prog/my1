@@ -200,7 +200,8 @@ function parseQuick(input, base = today()) {
     if (u.startsWith('д') || u.startsWith('сут')) return (n || 1) * 1440;
     return n || 1;
   };
-  take(',? ?пока не (?:сделаю|скажу|отмечу|выполню)', () => { r.nag = true; });
+  // «пока не сделаю», «повторяй, пока я не отмечу, что сделал», «напоминай, пока не скажу»
+  take(',? ?(?:(?:и )?(?:повторяй|напоминай|напоминать)(?: мне)?,? ?)?пока (?:я )?не (?:сделаю|скажу|отмечу|выполню|нажму)(?:,? что (?:сделал[аио]?|выполнил[аио]?|готово))?', () => { r.nag = true; });
   take(`${REMIND}(?:каждые|каждый|каждую|раз в) (?:(\\d+) )?(минут[уы]?|мин|час(?:а|ов)?|ч|полчаса)`, (m) => {
     r.every = Math.max(5, unitMinutes(m[1] ? +m[1] : 0, m[2]));
   });
@@ -228,10 +229,19 @@ function parseQuick(input, base = today()) {
     if (times.some(([hh, mm]) => hh > 23 || mm > 59)) return false;
     r.times = [...new Set(times.map(([hh, mm]) => `${pad(hh)}:${pad(mm)}`))].sort();
   });
+  // «напомни в 13:20» — одно время напоминания (несколько — правило выше)
+  take(`(?:напомни(?:ть)?|напоминай|напоминание)(?: мне)? в (${T})`, (m) => {
+    const [hh, mm = '0'] = m[1].split(':');
+    if (+hh > 23 || +mm > 59) return false;
+    r.times = [`${pad(+hh)}:${pad(+mm)}`];
+    r.remindWord = true;
+  });
   take('через (?:(\\d+) )?(минут[уы]?|мин|час(?:а|ов)?|полчаса)', (m) => {
     r.inMinutes = unitMinutes(m[1] ? +m[1] : 0, m[2]);
   });
   take('напомни(?:ть)?(?: мне)?|напоминай|напоминать', () => { r.remindWord = true; });
+  // «…, повторяй» без интервала — напоминать, пока не отмечу
+  if (r.remindWord || r.times || r.inMinutes) take(',? ?(?:и )?повторяй(?: напоминание)?', () => { r.nag = true; });
 
   // Повторы
   take('каждый день|ежедневно', () => { r.repeat = 'daily'; });
@@ -326,6 +336,14 @@ function parseQuick(input, base = today()) {
     });
   }
 
+  // Время без предлога, но с двоеточием: «13:30 созвон»
+  if (!r.start) {
+    take('(\\d{1,2}):(\\d{2})', (m) => {
+      if (!validTime(+m[1], +m[2])) return false;
+      r.start = `${pad(+m[1])}:${m[2]}`;
+    });
+  }
+
   // Даты
   take('(\\d{1,2})\\.(\\d{1,2})(?:\\.(\\d{4}|\\d{2}))?', (m) => {
     const y = m[3] ? (m[3].length === 2 ? 2000 + +m[3] : +m[3]) : null;
@@ -371,9 +389,12 @@ function parseQuick(input, base = today()) {
   if (r.start && r.end && toMin(r.end) <= toMin(r.start)) r.end = fromMin(toMin(r.start) + 60);
 
   let title = s.replace(/\s+/g, ' ').trim()
+    // Остатки от вырезанных частей: «созвон , , .» → «созвон»
+    .replace(/\s+([,.;])/g, '$1')
+    .replace(/([,;])(?:\s*[,;.])+/g, '$1')
     .replace(/^(?:в|во|на|к|до|с|со|по)\s+/i, '')
     .replace(/[\s,]+(?:в|во|на|к|до|с|со|по)$/i, '')
-    .replace(/^[,.\s-]+|[,\s-]+$/g, '');
+    .replace(/^[,.\s-]+|[,;.\s-]+$/g, '');
   r.title = title ? title[0].toUpperCase() + title.slice(1) : '';
   return r;
 }
@@ -696,7 +717,8 @@ function reminderFromParse(p, { now, tz, quiet = DEFAULT_QUIET, dueKey = null, d
   for (const hm of p.times || []) at.push(zonedMs(day, hm, tz));
   if (p.inMinutes) at.push(now + p.inMinutes * MINUTE);
   if (p.count) at.push(...spreadTimes(p.count, day, dueTime, now, tz));
-  const every = p.every || (p.nag ? 60 : null);
+  // «напомни в 13:20, повторяй» — повторять через 15 минут после первого напоминания; просто «пока не сделаю» — каждый час
+  const every = p.every || (p.nag ? (at.length === 1 ? 15 : 60) : null);
   // «напомни позвонить маме в 18» — ровно в 18, а не за час
   if (p.remindWord && !every && !at.length && dueTime) at.push(zonedMs(day, dueTime, tz));
   if (!at.length && !every) return null;
@@ -704,7 +726,8 @@ function reminderFromParse(p, { now, tz, quiet = DEFAULT_QUIET, dueKey = null, d
   return normalizeReminder({
     at: at.map(iso),
     every,
-    from: iso(now),
+    // Повтор начинается с первого названного напоминания, а не с момента, когда задачу записали
+    from: iso(every && at.length ? Math.min(...at) : now),
     window: p.window || null,
     until: every && deadline ? iso(deadline) : null,
     keepAfter: Boolean(every && deadline),
@@ -937,7 +960,7 @@ if (typeof module !== 'undefined') {
  */
 
 /* global parseQuick, normalizePlan, collect, addDays, fromKey, toKey, toMin, localParts, zonedMs, reminderFromParse,
-   describeReminder, dayLabel, DEFAULT_QUIET, endMinutes, fromMin */
+   describeReminder, dayLabel, DEFAULT_QUIET, endMinutes, fromMin, nextKey */
 
 const PHRASE_TASK_PREFIX = /^\s*(?:задача|todo|\[\s?\])\s*[:\-–]?\s*/i;
 const phraseNorm = (t) => String(t).toLowerCase().replace(/ё/g, 'е');
@@ -1051,8 +1074,31 @@ function describePhraseItem({ kind, item, cal, linkTitle }, now, tz, calName) {
   return parts.join(' · ');
 }
 
+/**
+ * «Когда напомнить?» — ответ словами: «через 40 минут», «в 17:30», «завтра в 9», «40».
+ * Возвращает момент (мс) в будущем или null, если не понятно.
+ */
+function snoozeFromText(text, now, tz) {
+  const raw = String(text || '').trim();
+  const todayKey = localParts(now, tz).key;
+  const bare = raw.match(/^(\d{1,3})\s*(?:м|мин|минут[уы]?)?$/i);
+  if (bare && +bare[1] > 0) return now + +bare[1] * 60000;
+  const short = raw.match(/^(\d{1,3})\s*(ч|час(?:а|ов)?|д|дн(?:я|ей)?|день)$/i);
+  if (short && +short[1] > 0) return now + +short[1] * (/^д/i.test(short[2]) ? 1440 : 60) * 60000;
+  const r = parseQuick(` ${raw} `, fromKey(todayKey));
+  if (r.inMinutes) return now + r.inMinutes * 60000;
+  if (r.date || r.start) {
+    const key = r.date ? toKey(r.date) : todayKey;
+    let at = zonedMs(key, r.start || '09:00', tz);
+    // «в 9», а 9 уже прошло — значит завтра
+    if (!r.date && at <= now) at = zonedMs(nextKey(todayKey), r.start, tz);
+    return at > now ? at : null;
+  }
+  return null;
+}
+
 if (typeof module !== 'undefined') {
-  module.exports = { phraseToItem, describePhraseItem, calendarByTag, phraseMentionMatches };
+  module.exports = { phraseToItem, describePhraseItem, calendarByTag, phraseMentionMatches, snoozeFromText };
 }
 
 // ===== reminder-server.js =====
@@ -1080,7 +1126,7 @@ if (typeof module !== 'undefined') {
  */
 
 /* global dueAlarms, nextAlarm, alarmText, generateVapidKeys, hmacSha256, b64url, iso, localParts, dayLabel, refreshAlarm,
-   digestMessage, dayAgenda, agendaLine, phraseToItem, describePhraseItem, nextKey, DEFAULT_QUIET */
+   digestMessage, dayAgenda, agendaLine, phraseToItem, describePhraseItem, nextKey, DEFAULT_QUIET, snoozeFromText */
 
 const ACTION_SNOOZE_MAX = 7 * 24 * 60;
 
@@ -1150,7 +1196,7 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
             ...(row.kind === 'task' ? [{ text: '✓ Сделал', callback_data: `d:${row.id}` }] : []),
             { text: 'Через 15 мин', callback_data: `s:${short}:${row.id}` },
             { text: 'Через час', callback_data: `h:${short}:${row.id}` },
-          ]],
+          ], [{ text: '⏰ Другое время', callback_data: `o:${short}:${row.id}` }]],
         },
       });
     }
@@ -1357,9 +1403,10 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
 
   /* ---------- Telegram-бот ---------- */
 
-  const send = (chatId, text, buttons = null) => telegram.call('sendMessage', {
+  const send = (chatId, text, buttons = null, forceReply = false) => telegram.call('sendMessage', {
     chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true,
     ...(buttons ? { reply_markup: { inline_keyboard: buttons } } : {}),
+    ...(forceReply ? { reply_markup: { force_reply: true, input_field_placeholder: 'через 40 минут / в 17:30' } } : {}),
   });
 
   const HELP = [
@@ -1394,6 +1441,17 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
     if (!link) return send(chatId, 'Чтобы подключить бота, откройте календарь → ☰ → «Telegram» → «Подключить».');
     const user = link.user_id;
     const tz = (await contacts([user])).tzOf(user);
+    // Ответ на «⏰ Когда напомнить?» — в вопросе спрятана ссылка с тем, что откладываем
+    const ref = (msg.reply_to_message?.entities || []).map((e) => e.url || '').find((u) => u.includes('snooze='));
+    if (ref) {
+      const [short, id] = ref.split('snooze=')[1].split(':');
+      const until = snoozeFromText(text, t, tz);
+      if (!until) return send(chatId, '🤔 Не понял время. Напишите, например: «через 40 минут», «в 17:30» или «завтра в 9».');
+      const res = await applyAction(user, short === 't' ? 'task' : 'event', id, 'snooze', Math.ceil((until - t) / 60000));
+      if (res.status !== 200) return send(chatId, 'Не нашёл это напоминание — возможно, его уже удалили.');
+      const p = localParts(until, tz);
+      return send(chatId, `⏰ Напомню ${dayLabel(p.key, t, tz)} в ${p.hm}`);
+    }
     const today = localParts(t, tz).key;
     const cmd = text.toLowerCase().replace(/@\w+$/, '');
     if (/^\/(start|help)$|^помощь$/.test(cmd)) return send(chatId, HELP);
@@ -1429,6 +1487,13 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
       else if (op === 's' || op === 'h') {
         const m = op === 's' ? 15 : 60;
         note = (await applyAction(user, type, b, 'snooze', m)).status === 200 ? `Напомню через ${m === 15 ? '15 минут' : 'час'}` : 'Не найдено';
+      } else if (op === 'o') {
+        const row = await db.getItem(user, type, b);
+        if (!row) note = 'Не найдено';
+        else {
+          note = 'Когда напомнить?';
+          await send(chatId, `⏰ Когда напомнить «${tgEscape(row.data?.title || '')}»?<a href="https://t.me/?snooze=${a}:${b}">\u200b</a>\nОтветьте на это сообщение: «через 40 минут», «в 17:30», «завтра в 9».`, null, true);
+        }
       } else if (op === 'u') {
         await db.deleteItem(user, type, b);
         note = 'Отменено, удалил';
@@ -1439,7 +1504,7 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
       }
     }
     await telegram.call('answerCallbackQuery', { callback_query_id: cb.id, text: note }).catch(() => {});
-    if (cb.message) {
+    if (cb.message && !String(cb.data || '').startsWith('o:')) {
       await telegram.call('editMessageText', {
         chat_id: chatId, message_id: cb.message.message_id, text: `${cb.message.text || ''}\n\n${note}`,
       }).catch(() => {});
