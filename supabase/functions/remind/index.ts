@@ -336,6 +336,14 @@ function parseQuick(input, base = today()) {
     });
   }
 
+  // Время без предлога, но с двоеточием: «13:30 созвон»
+  if (!r.start) {
+    take('(\\d{1,2}):(\\d{2})', (m) => {
+      if (!validTime(+m[1], +m[2])) return false;
+      r.start = `${pad(+m[1])}:${m[2]}`;
+    });
+  }
+
   // Даты
   take('(\\d{1,2})\\.(\\d{1,2})(?:\\.(\\d{4}|\\d{2}))?', (m) => {
     const y = m[3] ? (m[3].length === 2 ? 2000 + +m[3] : +m[3]) : null;

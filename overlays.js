@@ -159,6 +159,9 @@ function drawLink(svg, a, b, color) {
 
 function initOverlays() {
   window.addEventListener('resize', scheduleOverlays);
+  // Вернулись в приложение (iPhone мог посчитать раскладку, пока оно было в фоне) — пересчитываем
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleOverlays(); });
+  window.addEventListener('pageshow', scheduleOverlays);
   // Прокрутка сетки недели сдвигает элементы относительно линий, нарисованных поверх всего вида
   document.addEventListener('scroll', (e) => {
     if (e.target instanceof Element && e.target.classList.contains('tg-scroll')) scheduleOverlays();

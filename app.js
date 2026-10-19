@@ -502,6 +502,7 @@ const monthResize = new ResizeObserver((entries) => {
     if (!target.isConnected) continue;
     target.scrollTop = monthTopRow * monthRowHeight(target.firstElementChild);
   }
+  scheduleOverlays(); // высота клеток изменилась — заново решаем, что влезает, а что уходит в «ещё N»
 });
 
 const sameMonth = (a, b) => a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear();
@@ -557,7 +558,8 @@ function fitMonthCells(view) {
   });
   // Сначала все замеры, потом все изменения — чтобы браузер не пересчитывал раскладку на каждой клетке
   const cuts = rows.map(({ cell, items }) => {
-    if (!items.length) return -1;
+    // Клетка ещё не разложена (приложение в фоне, лента скрыта) — ничего не прячем, пересчитаем позже
+    if (!items.length || cell.clientHeight < 40) return -1;
     const limit = cell.clientHeight - 2;
     const bottom = (x) => x.offsetTop + x.offsetHeight;
     if (bottom(items[items.length - 1]) <= limit) return -1;
