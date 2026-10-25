@@ -439,13 +439,15 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .cell > .chip:not(.is-span) .chip-title {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   white-space: normal;
   overflow-wrap: break-word;
   -webkit-hyphens: auto;
   hyphens: auto;
 }
 .cell > .chip:not(.is-span)::before { margin-top: 5px; }
+/* Много дел в клетке — названия по две строки */
+.cell.is-tight > .chip:not(.is-span) .chip-title { -webkit-line-clamp: 2; }
 .chip.is-span {
   margin: 0 -5px;
   padding-left: 9px;
