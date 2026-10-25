@@ -148,7 +148,7 @@ test('«Проверить push»: только для вошедшего, от�
 
 /* ---------- Telegram, приглашения, утренняя сводка ---------- */
 
-Object.assign(globalThis, require('../digest.js'), require('../phrase.js'));
+Object.assign(globalThis, require('../weather.js'), require('../digest.js'), require('../phrase.js'));
 
 function setupFull(nowMs) {
   const base = setup(nowMs);
@@ -325,4 +325,105 @@ test('«⏰ Другое время»: бот спрашивает и поним
   await server.telegramUpdate({ message: { chat: { id: 7 }, text: 'в 17:30', reply_to_message: { text: 'x', entities: [{ type: 'text_link', url }] } } });
   assert.equal(tg.at(-1).text, '⏰ Напомню сегодня в 17:30');
   assert.equal(hm(Date.parse(db.get('u1', 'task', 'call').reminder.snooze)).hm, '17:30');
+});
+
+const { openMeteo } = require('./wx-fixture.js');
+const { parseForecast } = require('../weather.js');
+
+function weatherEnv(clock, days, extra = {}) {
+  const env = setupFull(clock.now);
+  const { db } = env;
+  const tg = [];
+  const pushes = [];
+  Object.assign(db, {
+    async weatherPrefs() { return db.prefs.filter((p) => p.wx_lat != null && p.wx_eve); },
+    async claimWeather(user, key) { const p = db.prefs.find((x) => x.user_id === user); if (p.wx_sent && p.wx_sent >= key) return false; p.wx_sent = key; return true; },
+    async updatePrefs(user, patch) { Object.assign(db.prefs.find((x) => x.user_id === user), structuredClone(patch)); },
+  });
+  const calls = [];
+  const server = createReminderServer({
+    db, now: () => clock.now, actionUrl: 'x', subject: 's',
+    push: async (s, p) => { pushes.push(JSON.parse(p)); return { ok: true, status: 201 }; },
+    telegram: { async call(m, p) { tg.push({ method: m, ...p }); return true; }, async download(id) { return new TextEncoder().encode(`audio:${id}`); } },
+    weather: { async forecast(lat, lon, tz) { calls.push([lat, lon, tz]); return parseForecast(openMeteo(days, tz)); } },
+    ...extra,
+  });
+  db.subs.push({ endpoint: 'a', user_id: 'u1', p256dh: 'x', auth: 'y', tz: TZ });
+  db.links.push({ user_id: 'u1', chat_id: 7, mode: 'both' });
+  db.prefs.push({ user_id: 'u1', tz: TZ, digest_time: '08:00', wx_lat: 55.75, wx_lon: 37.62, wx_place: 'Москва', wx_feel: 'normal', wx_adjust: 0, wx_eve: '21:00', wx_log: [] });
+  return { db, tg, pushes, server, calls };
+}
+
+test('погода вечером: «Как было по одежде?» каждый вечер, совет — только если завтра заметно другое', async () => {
+  const clock = { now: at('2026-10-26', '20:59') };
+  const days = [{ key: '2026-10-26', t: [8, 14] }, { key: '2026-10-27', t: [7, 15] }, { key: '2026-10-28', t: [-2, 4], rain: [9, 13] }];
+  const { db, tg, pushes, server } = weatherEnv(clock, days);
+  await server.tick();
+  assert.equal(pushes.length, 0);
+  clock.now = at('2026-10-26', '21:00');
+  await server.tick();
+  await server.tick();
+  // Завтра почти как сегодня — только вопрос
+  assert.deepEqual(pushes.map((p) => [p.title, p.kind, p.day]), [['👕 Как было по одежде сегодня?', 'weather', '2026-10-26']]);
+  const q = tg.find((x) => x.method === 'sendMessage');
+  assert.match(q.text, /Как было по одежде сегодня/);
+  assert.deepEqual(q.reply_markup.inline_keyboard.flat().map((b) => b.callback_data), ['w:2026-10-26:cold', 'w:2026-10-26:ok', 'w:2026-10-26:hot', 'w:2026-10-26:in']);
+  // Ответ кнопкой: журнал и поправка
+  await server.telegramUpdate({ callback_query: { id: 'q', data: 'w:2026-10-26:cold', message: { chat: { id: 7 }, message_id: 3, text: q.text } } });
+  assert.deepEqual(db.prefs[0].wx_log, [{ d: '2026-10-26', a: 'cold' }]);
+  assert.equal(db.prefs[0].wx_adjust, -1);
+  assert.match(tg.find((x) => x.method === 'answerCallbackQuery').text, /холодно — буду советовать потеплее/);
+  // Следующий вечер: завтра похолодает и дождь — совет на завтра и вопрос
+  clock.now = at('2026-10-27', '21:05');
+  await server.tick();
+  const eve = pushes.at(-1);
+  assert.match(eve.title, /^🌦 Завтра похолодает на \d+°, дождь/);
+  assert.match(eve.body, /зонт/);
+  assert.match(eve.body, /Как было по одежде сегодня/);
+  const msg = tg.filter((x) => x.method === 'sendMessage').at(-1);
+  assert.match(msg.text, /🧥 Верхняя: /);
+  assert.match(msg.text, /Как было по одежде сегодня/);
+  // Уже ответил днём в календаре и завтра как сегодня — молчим
+  db.prefs[0].wx_log.push({ d: '2026-10-28', a: 'ok' });
+  const before = pushes.length;
+  clock.now = at('2026-10-28', '21:00');
+  days.push({ key: '2026-10-29', t: [-1, 5], rain: [9, 13] });
+  await server.tick();
+  assert.equal(pushes.length, before);
+});
+
+test('погода: строка в утренней сводке и команда /weather; прогноз недоступен — берём сохранённый календарём', async () => {
+  const clock = { now: at('2026-10-26', '08:00') };
+  const days = [{ key: '2026-10-26', t: [2, 11], rain: [14, 17] }, { key: '2026-10-27', t: [3, 9] }];
+  const { db, tg, pushes, server } = weatherEnv(clock, days);
+  db.put('u1', 'event', normalizeEvent({ id: 'e', title: 'Работа', date: '2026-10-26', start: '09:00', end: '18:00' }));
+  await server.tick();
+  assert.match(pushes[0].body, /^Первое — 09:00 Работа\n🌦 \+\d…\+11°, дождь 14–17 · .*зонт/);
+  assert.match(tg.find((x) => x.method === 'sendMessage').text, /🌦 .*дождь 14–17/);
+  await server.telegramUpdate({ message: { chat: { id: 7 }, text: '/weather' } });
+  const w = tg.at(-1).text;
+  assert.match(w, /<b>Сегодня · Москва<\/b>/);
+  assert.match(w, /<b>Завтра<\/b>/);
+  // Open-Meteo не ответил — совет из сохранённого прогноза
+  const cache = parseForecast(openMeteo(days, TZ));
+  const env2 = weatherEnv(clock, days, { weather: { async forecast() { throw new Error('429'); } } });
+  env2.db.prefs[0].wx_cache = cache;
+  await env2.server.tick();
+  assert.match(env2.pushes[0].body, /дождь 14–17/);
+});
+
+test('голосовое в Telegram: распознаём и добавляем как фразу; без ключа — подсказка', async () => {
+  const clock = { now: at('2026-10-19', '12:00') };
+  const heard = [];
+  const { db, tg, server } = weatherEnv(clock, [], { stt: { async transcribe(bytes, mime) { heard.push([new TextDecoder().decode(bytes), mime]); return 'Завтра в пятнадцать тридцать встреча с Аней.'; } } });
+  await server.telegramUpdate({ message: { chat: { id: 7 }, voice: { file_id: 'f1', duration: 4, mime_type: 'audio/ogg' } } });
+  assert.deepEqual(heard, [['audio:f1', 'audio/ogg']]);
+  assert.equal(tg.at(-1).text, '🎤 «Завтра в пятнадцать тридцать встреча с Аней»\n✓ Добавлено: Встреча с Аней · завтра, 15:30–16:30 · Личное');
+  const ev = [...db.items.values()].find((r) => r.kind === 'event');
+  assert.equal(ev.data.start, '15:30');
+  await server.telegramUpdate({ message: { chat: { id: 7 }, voice: { file_id: 'f2', duration: 95 } } });
+  assert.match(tg.at(-1).text, /до минуты/);
+  const noKey = weatherEnv(clock, []);
+  await noKey.server.telegramUpdate({ message: { chat: { id: 7 }, voice: { file_id: 'f3', duration: 3 } } });
+  assert.match(noKey.tg.at(-1).text, /GROQ_API_KEY/);
 });

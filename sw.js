@@ -1,7 +1,7 @@
 // Офлайн-режим: файлы приложения хранятся в кэше на случай, если сети нет.
-const CACHE = 'everyday-calendar-v18';
+const CACHE = 'everyday-calendar-v19';
 const ASSETS = [
-  './', 'index.html', 'style.css', 'config.js', 'core.js', 'alarms.js', 'insights.js', 'sharing.js', 'sync.js', 'tasks.js', 'remind-editor.js', 'reminders-ui.js', 'overlays.js', 'insights-ui.js', 'friends.js', 'invites.js', 'notify-settings.js', 'onboarding.js', 'share-image.js', 'app.js',
+  './', 'index.html', 'style.css', 'config.js', 'core.js', 'alarms.js', 'weather.js', 'insights.js', 'sharing.js', 'sync.js', 'tasks.js', 'remind-editor.js', 'reminders-ui.js', 'overlays.js', 'insights-ui.js', 'friends.js', 'invites.js', 'notify-settings.js', 'onboarding.js', 'share-image.js', 'weather-ui.js', 'voice.js', 'app.js',
   'vendor/supabase-2.117.2.js', 'manifest.webmanifest', 'icon.svg',
 ];
 
@@ -48,8 +48,8 @@ self.addEventListener('push', (e) => {
   } catch {
     d = { title: 'Календарь', body: e.data ? e.data.text() : '' };
   }
-  // Без kind — тестовое уведомление «Проверить push», сводка и ответы на приглашения — без кнопок
-  const actions = !d.kind || d.kind === 'digest' ? []
+  // Без kind — тестовое уведомление «Проверить push», сводка, погода и ответы на приглашения — без кнопок
+  const actions = !d.kind || d.kind === 'digest' || d.kind === 'weather' ? []
     : d.kind === 'invite' ? (d.token ? [{ action: 'accept', title: '✓ Приду' }, { action: 'decline', title: '✕ Не смогу' }] : [])
       : d.kind === 'task'
         ? [{ action: 'done', title: '✓ Сделал' }, { action: 'snooze15', title: 'Через 15 мин' }]
@@ -84,6 +84,14 @@ self.addEventListener('notificationclick', (e) => {
         }
       }
       await self.clients.openWindow(`./?invite=${d.id}`);
+      return;
+    }
+    // Вечерний вопрос «Как было по одежде?» и совет на завтра — открыть окно погоды
+    if (d.kind === 'weather') {
+      if (list[0]) {
+        await list[0].focus();
+        list[0].postMessage({ type: 'weather-open', day: d.day });
+      } else await self.clients.openWindow(`./?weather=${d.day || ''}`);
       return;
     }
     if (d.kind === 'digest') {

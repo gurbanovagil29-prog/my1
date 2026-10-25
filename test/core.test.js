@@ -208,3 +208,25 @@ test('нормализация отбрасывает мусор', () => {
   assert.equal(e.start, null);
   assert.equal(e.repeat, 'none');
 });
+
+test('голосовой ввод: числа словами становятся временем и датой, названия не трогаем', () => {
+  const base = new Date(2026, 9, 19);
+  const p = (t) => {
+    const r = c.parseQuick(t, base);
+    return [r.title, r.date ? c.toKey(r.date) : null, r.start, r.end];
+  };
+  assert.deepEqual(p('встреча в пятнадцать тридцать'), ['Встреча', null, '15:30', '16:30']);
+  assert.deepEqual(p('завтра в три часа дня созвон'), ['Созвон', '2026-10-20', '15:00', '16:00']);
+  assert.deepEqual(p('полвосьмого вечера ужин'), ['Ужин', null, '19:30', '20:30']);
+  assert.deepEqual(p('без пятнадцати девять завтрак'), ['Завтрак', null, '08:45', '09:45']);
+  assert.deepEqual(p('двадцать пятого октября в десять защита проекта'), ['Защита проекта', '2026-10-25', '10:00', '11:00']);
+  assert.deepEqual(p('с девяти до шести работа'), ['Работа', null, '09:00', '18:00']);
+  assert.deepEqual(p('с 9 до 6 работа'), ['Работа', null, '09:00', '18:00']);
+  assert.deepEqual(p('к девяти ноль пять врач'), ['Врач', null, '09:05', '10:05']);
+  assert.deepEqual(p('в час обед'), ['Обед', null, '13:00', '14:00']);
+  assert.deepEqual(p('три поросёнка в кино в семь вечера'), ['Три поросёнка в кино', null, '19:00', '20:00']);
+  assert.deepEqual(p('в один клик'), ['Один клик', null, null, null]);
+  assert.equal(c.parseQuick('напомни за пятнадцать минут встреча', base).before[0], 15);
+  assert.equal(c.parseQuick('через полтора часа выйти', base).inMinutes, 90);
+  assert.equal(c.parseQuick('позвонить, напоминай каждые десять минут', base).every, 10);
+});

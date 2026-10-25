@@ -17,13 +17,18 @@
  *   savePrefsTz(userId, tz), digestPrefs() → [prefs], claimDigest(userId, key) → bool,
  *   inviteNotices() → [invite], clearInviteNotice(id, notify) → bool, answerInvite(id, userId, status) → bool,
  *   userItems(userId) → [{ kind, id, data }], insertItem(userId, kind, id, data), deleteItem(userId, kind, id),
+ *   — погода (update-3.sql): weatherPrefs() → [prefs с местом и временем вечернего совета], claimWeather(userId, key) → bool,
+ *   updatePrefs(userId, patch),
  * }
  * push(subscription, payloadString, vapid) → Response
- * telegram: { call(method, params) → result } | null — Bot API (токен бота знает только функция)
+ * telegram: { call(method, params) → result, download(fileId) → Uint8Array } | null — Bot API (токен бота знает только функция)
+ * weather: { forecast(lat, lon, tz) → прогноз (weather.js) } | null
+ * stt: { transcribe(bytes, mimeType) → text } | null — распознавание голосовых (ключ сервиса знает только функция)
  */
 
 /* global dueAlarms, nextAlarm, alarmText, generateVapidKeys, hmacSha256, b64url, iso, localParts, dayLabel, refreshAlarm,
-   digestMessage, dayAgenda, agendaLine, phraseToItem, describePhraseItem, nextKey, DEFAULT_QUIET, snoozeFromText */
+   digestMessage, dayAgenda, agendaLine, phraseToItem, describePhraseItem, nextKey, DEFAULT_QUIET, snoozeFromText,
+   clothingAdvice, weatherChange, wxOffset, applyWeatherFeedback, weatherLine, adviceLines, fmtRange, WX_ANSWER_TEXT */
 
 const ACTION_SNOOZE_MAX = 7 * 24 * 60;
 
@@ -31,8 +36,13 @@ const tgEscape = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&l
 const capitalizeRu = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const INVITE_ANSWERS = { a: 'accepted', m: 'maybe', d: 'declined' };
 const ANSWER_TEXT = { accepted: 'придёт ✓', maybe: 'может быть ?', declined: 'не сможет ✕' };
+const WX_BUTTONS = (key) => [
+  [{ text: '🥶 Холодно', callback_data: `w:${key}:cold` }, { text: '👌 В самый раз', callback_data: `w:${key}:ok` }, { text: '🥵 Жарко', callback_data: `w:${key}:hot` }],
+  [{ text: '🏠 Не был(а) на улице', callback_data: `w:${key}:in` }],
+];
+const VOICE_MAX_SECONDS = 60;
 
-function createReminderServer({ db, push, now = () => Date.now(), actionUrl, subject, telegram = null }) {
+function createReminderServer({ db, push, now = () => Date.now(), actionUrl, subject, telegram = null, weather = null, stt = null }) {
   let keysPromise = null;
 
   /** Ключи VAPID и секрет для подписи кнопок создаются при первом обращении и хранятся в базе. */
@@ -220,7 +230,8 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
       const [lh, lm] = local.hm.split(':').map(Number);
       if (lh * 60 + lm - (hh * 60 + mm) > 180) continue;
       const { events, tasks } = await itemsOf(p.user_id);
-      const m = digestMessage({ events, tasks, key: local.key });
+      const fc = await forecastFor(p);
+      const m = digestMessage({ events, tasks, key: local.key, weather: weatherLine(adviceFor(fc, p, events, tasks, local.key, +local.hm.slice(0, 2))) });
       const c = await contacts([p.user_id]);
       sent += await deliver(c, p.user_id, {
         push: { title: m.title, body: m.body, kind: 'digest', tag: `digest:${local.key}` },
@@ -230,12 +241,102 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
     return sent;
   }
 
+  /* ---------- Погода: строка в сводке, вечерний вопрос и совет «на завтра» ---------- */
+
+  const forecasts = new Map();
+  /** Прогноз для места пользователя (один запрос на место за минуту); не достучались — последний, что прислал календарь. */
+  async function forecastFor(p) {
+    if (p?.wx_lat == null || p?.wx_lon == null) return null;
+    const tz = p.tz || 'UTC';
+    const id = `${(+p.wx_lat).toFixed(2)},${(+p.wx_lon).toFixed(2)},${tz}`;
+    const hit = forecasts.get(id);
+    if (hit && now() - hit.at < 10 * 60000) return hit.fc;
+    let fc = null;
+    if (weather) {
+      try {
+        fc = await weather.forecast(+p.wx_lat, +p.wx_lon, tz);
+      } catch (err) {
+        console.warn(`weather: ${err?.message || err}`);
+      }
+    }
+    fc ||= p.wx_cache?.days ? p.wx_cache : null;
+    forecasts.set(id, { at: now(), fc });
+    return fc;
+  }
+
+  /** Совет «что надеть» на день key с учётом дел этого дня (когда вы на улице) и сдвига «под себя». */
+  function adviceFor(fc, p, events, tasks, key, nowHour = null) {
+    if (!fc) return null;
+    const { items } = dayAgenda({ events, tasks, key });
+    return clothingAdvice(fc, key, { offset: wxOffset(p), events: items.filter((i) => i.start), nowHour });
+  }
+
+  /**
+   * Раз в минуту: в вечернее время пользователя (по умолчанию 21:00) — «Как было по одежде сегодня?»
+   * и, если завтра заметно отличается от сегодня, совет на завтра. Один раз за вечер.
+   */
+  async function runWeather() {
+    if (!db.weatherPrefs) return 0;
+    const t = now();
+    let sent = 0;
+    for (const p of await db.weatherPrefs()) {
+      const tz = p.tz || 'UTC';
+      const local = localParts(t, tz);
+      if (!p.wx_eve || local.hm < p.wx_eve || p.wx_sent === local.key) continue;
+      if (!(await db.claimWeather(p.user_id, local.key))) continue;
+      const [hh, mm] = p.wx_eve.split(':').map(Number);
+      const [lh, lm] = local.hm.split(':').map(Number);
+      if (lh * 60 + lm - (hh * 60 + mm) > 180) continue; // функция долго не работала — вечер прошёл
+      const ask = !(p.wx_log || []).some((x) => x.d === local.key);
+      const fc = await forecastFor(p);
+      const tomorrow = nextKey(local.key);
+      const change = fc ? weatherChange(fc.days[local.key], fc.days[tomorrow]) : [];
+      if (!ask && !change.length) continue;
+      let advice = null;
+      if (change.length) {
+        const { events, tasks } = await itemsOf(p.user_id);
+        advice = adviceFor(fc, p, events, tasks, tomorrow);
+      }
+      const question = '👕 Как было по одежде сегодня?';
+      const head = advice ? `🌦 Завтра ${change.join(', ')}` : question;
+      const c = await contacts([p.user_id]);
+      sent += await deliver(c, p.user_id, {
+        push: {
+          title: head,
+          body: advice
+            ? `${fmtRange(advice.temp[0], advice.temp[1])} · ${advice.short}${ask ? `\n${question} Нажмите, чтобы ответить` : ''}`
+            : 'Нажмите и ответьте — советы подстроятся под вас',
+          kind: 'weather', day: local.key, tag: `weather:${local.key}`,
+        },
+        tg: {
+          text: [
+            ...(advice ? [`<b>${tgEscape(head)}</b>`, ...adviceLines(advice).map(tgEscape), ''] : []),
+            ...(ask ? [`<b>${question}</b>`, 'Ответ подстроит советы под вас.'] : []),
+          ].join('\n').trim(),
+          buttons: ask ? WX_BUTTONS(local.key) : null,
+        },
+      });
+    }
+    return sent;
+  }
+
+  /** Ответ «Как было по одежде?» за день key: журнал и поправка «под себя». */
+  async function weatherFeedback(userId, key, answer) {
+    const p = (await db.prefsOf([userId]))[0] || { user_id: userId };
+    const before = +p.wx_adjust || 0;
+    const patch = applyWeatherFeedback(p, key, answer);
+    if (!patch || !db.updatePrefs) return null;
+    await db.updatePrefs(userId, patch);
+    return { before, after: patch.wx_adjust };
+  }
+
   /** Всё, что функция делает раз в минуту. */
   async function tick() {
+    forecasts.clear();
     const r = await runDue();
-    // Приглашения и сводка не должны мешать напоминаниям, даже если что-то не так
+    // Приглашения, сводка и погода не должны мешать напоминаниям, даже если что-то не так
     const safe = (fn) => fn().catch((err) => { console.error(err); return -1; });
-    return { ...r, invites: await safe(runInvites), digests: await safe(runDigests) };
+    return { ...r, invites: await safe(runInvites), digests: await safe(runDigests), weather: await safe(runWeather) };
   }
 
   /** Кнопки в уведомлении: «Сделал» и «Отложить». Проверяем подпись — менять можно только своё напоминание. */
@@ -315,6 +416,9 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
     '• 24 октября в 10 защита проекта ! — в обратный отсчёт',
     '',
     '/today — дела на сегодня, /tomorrow — на завтра, /week — на неделю',
+    '/weather — погода и что надеть',
+    '',
+    '🎤 Можно и голосовым — до минуты.',
   ].join('\n');
 
   function agendaText(events, tasks, key, t, tz, header) {
@@ -322,20 +426,22 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
     return [`<b>${tgEscape(header || capitalizeRu(dayLabel(key, t, tz)))}</b>`, ...(items.length ? items.map((i) => tgEscape(agendaLine(i))) : ['Свободно 🎉'])].join('\n');
   }
 
-  async function onMessage(msg) {
+  async function onMessage(msg, heard = null) {
     const chatId = msg.chat.id;
     const text = String(msg.text || '').trim();
     const t = now();
+    // Голосовое: ответ начинается с того, что бот расслышал
+    const say = (body, ...rest) => send(chatId, heard ? `🎤 «${tgEscape(heard)}»\n${body}` : body, ...rest);
     const start = text.match(/^\/start(?:@\w+)?(?:\s+(\S+))?/);
     if (start?.[1]) {
       const code = await db.takeTelegramCode(start[1]);
-      if (!code) return send(chatId, 'Код устарел или уже использован. Откройте в календаре ☰ → Telegram → «Подключить» ещё раз.');
+      if (!code) return say('Код устарел или уже использован. Откройте в календаре ☰ → Telegram → «Подключить» ещё раз.');
       await db.linkTelegram(code.user_id, chatId, msg.from?.username || null);
       if (code.tz) await db.savePrefsTz(code.user_id, code.tz);
-      return send(chatId, `✅ Готово, календарь подключён!\n\n${HELP}`);
+      return say(`✅ Готово, календарь подключён!\n\n${HELP}`);
     }
     const link = await db.telegramLinkByChat(chatId);
-    if (!link) return send(chatId, 'Чтобы подключить бота, откройте календарь → ☰ → «Telegram» → «Подключить».');
+    if (!link) return say('Чтобы подключить бота, откройте календарь → ☰ → «Telegram» → «Подключить».');
     const user = link.user_id;
     const tz = (await contacts([user])).tzOf(user);
     // Ответ на «⏰ Когда напомнить?» — в вопросе спрятана ссылка с тем, что откладываем
@@ -343,31 +449,44 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
     if (ref) {
       const [short, id] = ref.split('snooze=')[1].split(':');
       const until = snoozeFromText(text, t, tz);
-      if (!until) return send(chatId, '🤔 Не понял время. Напишите, например: «через 40 минут», «в 17:30» или «завтра в 9».');
+      if (!until) return say('🤔 Не понял время. Напишите, например: «через 40 минут», «в 17:30» или «завтра в 9».');
       const res = await applyAction(user, short === 't' ? 'task' : 'event', id, 'snooze', Math.ceil((until - t) / 60000));
-      if (res.status !== 200) return send(chatId, 'Не нашёл это напоминание — возможно, его уже удалили.');
+      if (res.status !== 200) return say('Не нашёл это напоминание — возможно, его уже удалили.');
       const p = localParts(until, tz);
-      return send(chatId, `⏰ Напомню ${dayLabel(p.key, t, tz)} в ${p.hm}`);
+      return say(`⏰ Напомню ${dayLabel(p.key, t, tz)} в ${p.hm}`);
     }
     const today = localParts(t, tz).key;
     const cmd = text.toLowerCase().replace(/@\w+$/, '');
-    if (/^\/(start|help)$|^помощь$/.test(cmd)) return send(chatId, HELP);
+    if (/^\/(start|help)$|^помощь$/.test(cmd)) return say(HELP);
+    if (/^\/weather$|^(погода|что надеть\??)$/.test(cmd)) {
+      const p = (await db.prefsOf([user]))[0];
+      const fc = await forecastFor(p);
+      if (!fc) return say('🌦 Погода пока не настроена: откройте календарь → «🌦 Погода» и разрешите геолокацию или выберите город.');
+      const { events, tasks } = await itemsOf(user);
+      const local = localParts(t, tz);
+      const todayAdvice = adviceFor(fc, p, events, tasks, today, +local.hm.slice(0, 2));
+      const tomorrowAdvice = adviceFor(fc, p, events, tasks, nextKey(today));
+      return say([
+        ...(todayAdvice ? [`<b>Сегодня${p.wx_place ? ` · ${tgEscape(p.wx_place)}` : ''}</b>`, ...adviceLines(todayAdvice).map(tgEscape), ''] : []),
+        ...(tomorrowAdvice ? [`<b>Завтра</b>`, tgEscape(weatherLine(tomorrowAdvice))] : []),
+      ].join('\n').trim() || '🌦 Прогноз на сегодня ещё не пришёл');
+    }
     if (/^\/(today|tomorrow|week)$|^(сегодня|завтра|неделя)$/.test(cmd)) {
       const { events, tasks } = await itemsOf(user);
-      if (/tomorrow|завтра/.test(cmd)) return send(chatId, agendaText(events, tasks, nextKey(today), t, tz));
+      if (/tomorrow|завтра/.test(cmd)) return say(agendaText(events, tasks, nextKey(today), t, tz));
       if (/week|неделя/.test(cmd)) {
         const days = Array.from({ length: 7 }, (_, i) => nextKey(today, i));
-        return send(chatId, days.map((k) => agendaText(events, tasks, k, t, tz)).join('\n\n'));
+        return say(days.map((k) => agendaText(events, tasks, k, t, tz)).join('\n\n'));
       }
-      return send(chatId, agendaText(events, tasks, today, t, tz));
+      return say(agendaText(events, tasks, today, t, tz));
     }
     const { events, calendars } = await itemsOf(user);
     const res = phraseToItem(text, { now: t, tz, calendars, events, newId: () => crypto.randomUUID() });
-    if (res.error) return send(chatId, `🤔 ${tgEscape(res.error)}`);
+    if (res.error) return say(`🤔 ${tgEscape(res.error)}`);
     refreshAlarm(res.kind, res.item, t, tz);
     await db.insertItem(user, res.kind, res.item.id, res.item);
     const calName = calendars.find((x) => x.id === res.item.cal)?.name;
-    return send(chatId, `✓ Добавлено: ${tgEscape(describePhraseItem(res, t, tz, calName))}`,
+    return say(`✓ Добавлено: ${tgEscape(describePhraseItem(res, t, tz, calName))}`,
       [[{ text: 'Отменить', callback_data: `u:${res.kind === 'task' ? 't' : 'e'}:${res.item.id}` }]]);
   }
 
@@ -394,6 +513,13 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
       } else if (op === 'u') {
         await db.deleteItem(user, type, b);
         note = 'Отменено, удалил';
+      } else if (op === 'w') {
+        const r = await weatherFeedback(user, a, b);
+        if (!r) note = 'Не получилось записать ответ';
+        else {
+          const tip = r.after < r.before ? ' — буду советовать потеплее' : r.after > r.before ? ' — буду советовать полегче' : '';
+          note = `Записал: ${WX_ANSWER_TEXT[b]}${tip}`;
+        }
       } else if (op === 'i') {
         const status = INVITE_ANSWERS[b];
         const ok = status && (await db.answerInvite(a, user, status));
@@ -408,11 +534,34 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
     }
   }
 
+  /** Голосовое: распознаём и дальше — как обычная фраза. */
+  async function onVoice(msg) {
+    const chatId = msg.chat.id;
+    if (!(await db.telegramLinkByChat(chatId))) return send(chatId, 'Чтобы подключить бота, откройте календарь → ☰ → «Telegram» → «Подключить».');
+    if (!stt || !telegram.download) {
+      return send(chatId, '🎤 Голосовые пока не настроены: нужен ключ распознавания GROQ_API_KEY в секретах функции remind (см. docs/SYNC_SETUP.md). А пока напишите фразу текстом.');
+    }
+    const v = msg.voice || msg.audio;
+    if ((v.duration || 0) > VOICE_MAX_SECONDS) return send(chatId, '🎤 Слишком длинное — запишите короче, до минуты.');
+    let heard = '';
+    try {
+      heard = String(await stt.transcribe(await telegram.download(v.file_id), v.mime_type || 'audio/ogg') || '').trim();
+    } catch (err) {
+      console.error(err);
+      return send(chatId, '🎤 Не получилось распознать — попробуйте ещё раз или напишите текстом.');
+    }
+    // Распознавание само ставит точку или «!» в конце — «!» у нас значит «закрепить», поэтому убираем
+    heard = heard.replace(/[.!…]+$/, '').trim();
+    if (!heard) return send(chatId, '🎤 Не расслышал — повторите, пожалуйста.');
+    return onMessage({ ...msg, text: heard }, heard);
+  }
+
   /** Сообщение от Telegram (webhook). */
   async function telegramUpdate(update) {
     if (!telegram) return { status: 503, body: { error: 'telegram is not configured' } };
     try {
       if (update?.message?.text) await onMessage(update.message);
+      else if (update?.message?.voice || update?.message?.audio) await onVoice(update.message);
       else if (update?.callback_query) await onCallback(update.callback_query);
     } catch (err) {
       console.error(err);
@@ -429,6 +578,7 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
         { command: 'today', description: 'Дела на сегодня' },
         { command: 'tomorrow', description: 'Дела на завтра' },
         { command: 'week', description: 'Дела на неделю' },
+        { command: 'weather', description: 'Погода и что надеть' },
         { command: 'help', description: 'Что умеет бот' },
       ],
     });
@@ -443,7 +593,7 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
     return { bot: botName };
   }
 
-  return { publicKey, runDue, runInvites, runDigests, tick, action, sign, testPush, telegramUpdate, telegramSetup, telegramInfo };
+  return { publicKey, runDue, runInvites, runDigests, runWeather, tick, action, sign, testPush, telegramUpdate, telegramSetup, telegramInfo };
 }
 
 if (typeof module !== 'undefined') {

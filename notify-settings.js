@@ -6,7 +6,7 @@
  * (user_prefs, telegram_links): их читает серверная функция remind.
  */
 
-/* global sync, h, $, toast, closeNav, userTz, renderFooter */
+/* global sync, h, $, toast, closeNav, userTz, renderFooter, onWeatherPrefs */
 
 const notify = { prefs: null, link: null, bot: undefined, missing: false, poll: null, connectUrl: null };
 
@@ -39,6 +39,7 @@ async function onPrefsUser() {
     const { data } = await sync.client.from('user_prefs').upsert({ user_id: sync.user.id, tz: userTz() }, { onConflict: 'user_id' }).select();
     notify.prefs = data?.[0] || notify.prefs;
   }
+  onWeatherPrefs(notify.prefs);
   renderFooter();
 }
 
