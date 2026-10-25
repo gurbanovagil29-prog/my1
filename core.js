@@ -232,6 +232,10 @@ function parseQuick(input, base = today()) {
     });
   }
   const UNIT = '(?:\\d+ )?(?:минут[уы]?|мин|час(?:а|ов)?|день|дня|дней|сутки|полчаса)';
+  // «напомни за 30, 15 и 5 минут» — одна единица на несколько чисел
+  take('(?:напомни(?:ть)?|напоминай|напоминание)(?: мне)? за (\\d+(?:(?:, ?|,? и )\\d+)+) ?(минут[уы]?|мин|час(?:а|ов)?|ч)', (m) => {
+    r.before = [...new Set(m[1].split(/,? и |, ?/).map((n) => unitMinutes(+n, m[2])))].sort((a, b) => b - a);
+  });
   take(`(?:напомни(?:ть)?|напоминание)(?: мне)? за ${UNIT}(?:(?:,|,? и) за ${UNIT})*`, (m) => {
     r.before = [...m[0].matchAll(/за (?:(\d+) )?([а-яё]+)/giu)].map((x) => unitMinutes(x[1] ? +x[1] : 0, x[2]));
   });
@@ -539,6 +543,8 @@ function normalizeEvent(e) {
     // За сколько минут до начала напомнить; старое поле remind (одно число) превращается в список
     reminds: [...new Set((Array.isArray(e.reminds) ? e.reminds : (e.remind != null ? [e.remind] : []))
       .filter((m) => Number.isFinite(m) && m >= 0 && m <= 7 * 1440).map(Math.round))].sort((a, b) => b - a),
+    // Напомнить в точное время (не зависит от начала события)
+    remindAt: (Array.isArray(e.remindAt) ? e.remindAt : []).map(parseIso).filter((x) => x != null).sort((a, b) => a - b).slice(0, 20).map(iso),
     snooze: isIsoOrNull(e.snooze),
     alarmAt: isIsoOrNull(e.alarmAt),
     alarmSig: typeof e.alarmSig === 'string' ? e.alarmSig : null,
@@ -569,9 +575,13 @@ function normalizeReminder(r) {
     .sort((a, b) => a - b).slice(0, 30).map(iso);
   const every = Number.isFinite(r.every) && r.every >= 5 ? Math.min(Math.round(r.every), 24 * 60) : null;
   const snooze = parseIso(r.snooze);
-  if (!at.length && !every && snooze == null) return null;
+  // За сколько минут до срока (или до начала «Когда делаю») напомнить: [30, 15, 5]
+  const before = [...new Set((Array.isArray(r.before) ? r.before : []).filter((m) => Number.isFinite(m) && m >= 0 && m <= 7 * 1440).map(Math.round))]
+    .sort((a, b) => b - a).slice(0, 10);
+  if (!at.length && !before.length && !every && snooze == null) return null;
   return {
     at,
+    before,
     every,
     from: every ? iso(parseIso(r.from) ?? Date.now()) : null,
     window: every ? pair(r.window) : null,

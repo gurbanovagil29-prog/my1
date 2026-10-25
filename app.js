@@ -8,7 +8,7 @@
    taskBadgeCount, openTaskEditor, initTasks, renderEvTasks, commitPendingTasks, compareTasks,
    syncSoon, initSync, openSyncDialog, renderSyncStatus,
    refreshAlarms, runLocalAlarms, enableReminders, notifyStatusText, quietLabel, initReminders, initTaskReminderFields,
-   setEditorReminds, editorReminds, reminderFromParse, describeReminder, userTz, quietHours, iso,
+   setEditorReminds, editorReminds, editorRemindAt, refreshEventReminds, reminderFromParse, describeReminder, userTz, quietHours, iso,
    plansByDay, planBlock, planChip, movePlan, planLabel, syncLinkedTaskDeadlines, mentionTargets, mentionSlug, normalizePlan, deadlineHint,
    upcomingOccurrences, scheduleOverlays, initOverlays, isDailySpan,
    layerCal, visibleLayerEvents, openFriendEvent, renderFriends, layerChips, initFriends, findConflicts,
@@ -25,7 +25,7 @@ let gridStart = DAY_START;
 const yOf = (min) => ((min - gridStart) / 60) * HOUR_H;
 const minOf = (y) => gridStart + (y / HOUR_H) * 60;
 const COLORS = ['#4f6bed', '#e5484d', '#f76b15', '#f5a524', '#30a46c', '#12a594', '#8e4ec6', '#e93d82', '#6b7280'];
-const VIEWS = ['month', 'week', 'day', 'agenda', 'tasks'];
+const VIEWS = ['month', 'week', 'agenda', 'tasks'];
 const DEFAULT_CALENDARS = [
   { id: 'personal', name: 'Личное', color: '#30a46c', visible: true },
   { id: 'work', name: 'Работа', color: '#4f6bed', visible: true },
@@ -248,10 +248,6 @@ function viewTitle() {
       if (s.getMonth() === e.getMonth()) return `${s.getDate()}–${e.getDate()} ${MONTHS_GEN[e.getMonth()]} ${e.getFullYear()}`;
       return `${s.getDate()} ${MONTHS_GEN[s.getMonth()]} – ${e.getDate()} ${MONTHS_GEN[e.getMonth()]} ${e.getFullYear()}`;
     }
-    case 'day': {
-      const rel = relativeDay(c);
-      return `${rel ? `${rel}, ` : `${WD_FULL[wdIndex(c)]}, `}${formatDate(c, { weekday: false, year: true })}`;
-    }
     case 'tasks': return 'Задачи';
     default: return `События с ${formatDate(c, { weekday: false })}`;
   }
@@ -282,7 +278,6 @@ function render() {
     placeMonth();
   }
   else if (state.view === 'week') view.append(renderTimeGrid(Array.from({ length: 7 }, (_, i) => addDays(startOfWeek(state.cursor), i))));
-  else if (state.view === 'day') view.append(renderTimeGrid([state.cursor]));
   else if (state.view === 'agenda') view.append(renderAgenda());
   else view.append(renderTasksView());
 
@@ -327,7 +322,6 @@ function go(dir) {
     state.monthFocus = first;
     monthScrollTo = first;
   } else if (state.view === 'week') state.cursor = addDays(c, 7 * dir);
-  else if (state.view === 'day') state.cursor = addDays(c, dir);
   else state.cursor = addDays(c, 14 * dir);
   state.mini = state.cursor;
   render();
@@ -344,7 +338,6 @@ function visibleRange() {
     return [addDays(monthRange.from, top * 7), addDays(monthRange.from, (top + rows) * 7 - 1)];
   }
   if (state.view === 'week') return [startOfWeek(c), addDays(startOfWeek(c), 6)];
-  if (state.view === 'day') return [c, c];
   return [c, addDays(c, 59)];
 }
 
@@ -354,6 +347,13 @@ function goToday() {
   monthScrollTo = today();
   state.autoScroll = true;
   render();
+}
+
+/** Все дела дня: на телефоне — панель под месяцем, на большом экране — неделя с этим днём. */
+function openDayDetails(day) {
+  const phone = window.matchMedia('(max-width: 860px)').matches;
+  selectDay(day, phone ? null : 'week');
+  if (phone) $('.day-panel')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 function selectDay(d, view) {
@@ -423,7 +423,7 @@ function renderMonth() {
     const cell = h('div', {
       class: cls.join(' '),
       dataset: { date: key },
-      onclick: () => (sameDay(day, state.cursor) ? selectDay(day, 'day') : selectDay(day)),
+      onclick: () => (sameDay(day, state.cursor) ? openDayDetails(day) : selectDay(day)),
     },
     h('div', { class: 'cell-head' },
       h('span', { class: 'cell-num' }, day.getDate() === 1 ? `${day.getDate()} ${MONTHS_GEN[day.getMonth()].slice(0, 3)}` : day.getDate()),
@@ -448,7 +448,7 @@ function renderMonth() {
         class: 'more',
         type: 'button',
         hidden: true,
-        onclick: (e) => { e.stopPropagation(); selectDay(day, 'day'); },
+        onclick: (e) => { e.stopPropagation(); openDayDetails(day); },
       }),
     );
     dropTarget(cell, key, 'date');
@@ -554,16 +554,20 @@ function fitMonthCells(view) {
     for (const x of items) x.hidden = false;
     const more = cell.lastElementChild;
     more.hidden = true;
+    cell.classList.remove('is-tight'); // названия до трёх строк, пока место есть
     return { cell, items, more };
   });
-  // Сначала все замеры, потом все изменения — чтобы браузер не пересчитывал раскладку на каждой клетке
-  const cuts = rows.map(({ cell, items }) => {
-    // Клетка ещё не разложена (приложение в фоне, лента скрыта) — ничего не прячем, пересчитаем позже
-    if (!items.length || cell.clientHeight < 40) return -1;
-    const limit = cell.clientHeight - 2;
-    const bottom = (x) => x.offsetTop + x.offsetHeight;
-    if (bottom(items[items.length - 1]) <= limit) return -1;
-    return Math.max(0, items.findIndex((x) => bottom(x) > limit - moreH - 2));
+  const bottom = (x) => x.offsetTop + x.offsetHeight;
+  // Клетка ещё не разложена (приложение в фоне, лента скрыта) — ничего не прячем, пересчитаем позже
+  const fits = ({ cell, items }) => !items.length || cell.clientHeight < 40 || bottom(items[items.length - 1]) <= cell.clientHeight - 2;
+  // Сначала все замеры, потом все изменения — чтобы браузер не пересчитывал раскладку на каждой клетке.
+  // Не влезает с тремя строками — названия по две строки, и только потом «ещё N»
+  const tight = rows.filter((r) => !fits(r));
+  for (const { cell } of tight) cell.classList.add('is-tight');
+  const cuts = rows.map((r) => {
+    if (!tight.includes(r) || fits(r)) return -1;
+    const limit = r.cell.clientHeight - 2;
+    return Math.max(0, r.items.findIndex((x) => bottom(x) > limit - moreH - 2));
   });
   rows.forEach(({ items, more }, i) => {
     if (cuts[i] < 0) return;
@@ -705,7 +709,7 @@ function renderTimeGrid(days) {
     days.map((d) => h('button', {
       class: `tg-day${sameDay(d, t) ? ' is-today' : ''}${d < t ? ' is-past-day' : ''}`,
       type: 'button',
-      onclick: () => selectDay(d, 'day'),
+      onclick: () => selectDay(d),
     }, h('span', { class: 'tg-wd' }, WD_SHORT[wdIndex(d)]), h('span', { class: 'tg-num' }, d.getDate()))));
 
   const lanes = spanLanes(days, allDayMap);
@@ -1183,7 +1187,7 @@ function openEditor({ ev = null, key = null, preset = {} } = {}) {
   f.end.value = v.start ? fromMin(endMinutes(v)) : '10:00';
   f.repeat.value = v.repeat;
   f.until.value = v.until || '';
-  setEditorReminds(v.reminds || []);
+  setEditorReminds(v.reminds || [], v.remindAt || [], () => ({ ...readEditor(), id: editing?.id || 'draft', exdates: v.exdates || [] }));
   f.notes.value = v.notes || '';
   f.pin.checked = Boolean(v.pin);
   pickedCal = calOf(v).id;
@@ -1220,6 +1224,7 @@ function readEditor() {
     until: repeat !== 'none' && f.until.value ? f.until.value : null,
     cal: pickedCal,
     reminds: editorReminds(),
+    remindAt: editorRemindAt(),
     notes: f.notes.value.trim(),
     pin: f.pin.checked,
   };
@@ -1268,7 +1273,10 @@ function updateEditorConflicts() {
   $('#fConflict').textContent = text;
   $('#fConflict').hidden = !text;
 }
-for (const el of [f.date, f.endDate, f.start, f.end, f.allDay, f.repeat]) el.addEventListener('change', updateEditorConflicts);
+for (const el of [f.date, f.endDate, f.start, f.end, f.allDay, f.repeat]) {
+  el.addEventListener('change', updateEditorConflicts);
+  el.addEventListener('change', () => refreshEventReminds()); // «Напомню: …» считается от нового времени
+}
 f.start.addEventListener('input', updateEditorConflicts);
 f.end.addEventListener('input', updateEditorConflicts);
 
@@ -1811,7 +1819,7 @@ function renderSearch() {
       onclick: () => {
         searchResults.hidden = true;
         searchInput.value = '';
-        selectDay(fromKey(key), state.view === 'month' ? 'month' : 'day');
+        selectDay(fromKey(key), state.view === 'month' ? 'month' : 'week');
         openEditor({ ev, key });
       },
     }, h('span', {}, highlight(ev.title, q),
@@ -1953,7 +1961,6 @@ document.addEventListener('keydown', (e) => {
     KeyT: goToday,
     KeyM: () => setView('month'),
     KeyW: () => setView('week'),
-    KeyD: () => setView('day'),
     KeyA: () => setView('agenda'),
     KeyP: () => setView('tasks'),
     KeyN: () => (state.view === 'tasks' ? openTaskEditor() : openEditor()),

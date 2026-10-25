@@ -214,6 +214,10 @@ function parseQuick(input, base = today()) {
     });
   }
   const UNIT = '(?:\\d+ )?(?:минут[уы]?|мин|час(?:а|ов)?|день|дня|дней|сутки|полчаса)';
+  // «напомни за 30, 15 и 5 минут» — одна единица на несколько чисел
+  take('(?:напомни(?:ть)?|напоминай|напоминание)(?: мне)? за (\\d+(?:(?:, ?|,? и )\\d+)+) ?(минут[уы]?|мин|час(?:а|ов)?|ч)', (m) => {
+    r.before = [...new Set(m[1].split(/,? и |, ?/).map((n) => unitMinutes(+n, m[2])))].sort((a, b) => b - a);
+  });
   take(`(?:напомни(?:ть)?|напоминание)(?: мне)? за ${UNIT}(?:(?:,|,? и) за ${UNIT})*`, (m) => {
     r.before = [...m[0].matchAll(/за (?:(\d+) )?([а-яё]+)/giu)].map((x) => unitMinutes(x[1] ? +x[1] : 0, x[2]));
   });
@@ -414,9 +418,13 @@ function normalizeReminder(r) {
     .sort((a, b) => a - b).slice(0, 30).map(iso);
   const every = Number.isFinite(r.every) && r.every >= 5 ? Math.min(Math.round(r.every), 24 * 60) : null;
   const snooze = parseIso(r.snooze);
-  if (!at.length && !every && snooze == null) return null;
+  // За сколько минут до срока (или до начала «Когда делаю») напомнить: [30, 15, 5]
+  const before = [...new Set((Array.isArray(r.before) ? r.before : []).filter((m) => Number.isFinite(m) && m >= 0 && m <= 7 * 1440).map(Math.round))]
+    .sort((a, b) => b - a).slice(0, 10);
+  if (!at.length && !before.length && !every && snooze == null) return null;
   return {
     at,
+    before,
     every,
     from: every ? iso(parseIso(r.from) ?? Date.now()) : null,
     window: every ? pair(r.window) : null,
@@ -565,9 +573,14 @@ function nextEventAlarm(ev, after, tz) {
   const snooze = parseIso(ev.snooze);
   if (snooze != null && snooze > after) return snooze;
   const offs = Array.isArray(ev.reminds) ? ev.reminds : [];
-  if (!offs.length) return null;
-  const maxOff = Math.max(...offs) * MINUTE;
+  // В точное время — независимо от начала
   let best = null;
+  for (const s of ev.remindAt || []) {
+    const t = parseIso(s);
+    if (t != null && t > after && (best == null || t < best)) best = t;
+  }
+  if (!offs.length) return best;
+  const maxOff = Math.max(...offs) * MINUTE;
   let key = nextKey(localParts(after, tz).key, -1);
   for (let i = 0; i < 800; i++, key = nextKey(key)) {
     if (ev.until && key > ev.until) break;
@@ -585,6 +598,22 @@ function nextEventAlarm(ev, after, tz) {
   return best;
 }
 
+/** От чего считать «за N минут»: срок со временем, иначе начало блока «Когда делаю». */
+function taskAnchor(task, tz) {
+  if (task.due && task.time) return zonedMs(task.due, task.time, tz);
+  if (task.plan?.start) return zonedMs(task.plan.date, task.plan.start, tz);
+  return null;
+}
+
+/** Разовые напоминания задачи: точные моменты и «за N минут до срока». */
+function taskSingles(task, tz) {
+  const r = task.reminder || {};
+  const out = (r.at || []).map(parseIso).filter((t) => t != null);
+  const anchor = taskAnchor(task, tz);
+  if (anchor != null) for (const m of r.before || []) out.push(anchor - m * MINUTE);
+  return out;
+}
+
 /** Ближайшее напоминание о задаче строго позже after. */
 function nextTaskAlarm(task, after, tz) {
   if (task.done) return null;
@@ -600,13 +629,14 @@ function nextTaskAlarm(task, after, tz) {
   const zone = r.tz || tz;
   const snooze = parseIso(r.snooze);
   if (snooze != null && snooze > after) return snooze;
+  const singles = taskSingles(task, zone);
   let best = null;
-  for (const s of r.at || []) {
-    const t = parseIso(s);
-    if (t != null && t > after && (best == null || t < best)) best = t;
-  }
+  for (const t of singles) if (t > after && (best == null || t < best)) best = t;
   if (r.every) {
-    const t = nextEvery(r, after, zone);
+    // Повтор «если не отметил» начинается после последнего названного напоминания
+    const last = singles.length ? Math.max(...singles) : null;
+    const rule = last != null && last > (parseIso(r.from) ?? -Infinity) ? { ...r, from: iso(last) } : r;
+    const t = nextEvery(rule, after, zone);
     if (t != null && (best == null || t < best)) best = t;
   }
   return best;
@@ -619,7 +649,7 @@ function nextAlarm(kind, item, after, tz) {
 /** От каких данных зависит расписание напоминаний объекта. */
 function alarmSig(kind, item) {
   const f = kind === 'event'
-    ? [item.date, item.start, item.endDate, item.repeat, item.until, item.exdates, item.reminds, item.snooze]
+    ? [item.date, item.start, item.endDate, item.repeat, item.until, item.exdates, item.reminds, item.snooze, ...(item.remindAt?.length ? [item.remindAt] : [])]
     : [item.done, item.due, item.time, item.eventId, item.plan, item.reminder];
   return JSON.stringify(f);
 }
@@ -672,7 +702,9 @@ function alarmText(kind, item, at, now, tz) {
       const deadline = zonedMs(item.due, item.time || '23:59', tz);
       const when = `${dayLabel(item.due, now, tz)}${item.time ? `, ${item.time}` : ''}`;
       // В пределах 5 минут от срока — «Срок: сейчас», позже — «Срок прошёл»
+      const mins = Math.round((deadline - now) / MINUTE);
       if (item.time && Math.abs(now - deadline) < 5 * MINUTE) body = `Срок: сейчас, ${item.time}`;
+      else if (item.time && mins > 0 && mins < 180) body = `Через ${mins} мин · ${when}`; // «за 15 минут до созвона»
       else body = deadline < now ? `Срок прошёл: ${when}` : `Срок: ${when}`;
     }
     // Напоминание в начале блока «Когда делаю»
@@ -718,13 +750,15 @@ function reminderFromParse(p, { now, tz, quiet = DEFAULT_QUIET, dueKey = null, d
   if (p.inMinutes) at.push(now + p.inMinutes * MINUTE);
   if (p.count) at.push(...spreadTimes(p.count, day, dueTime, now, tz));
   // «напомни в 13:20, повторяй» — повторять через 15 минут после первого напоминания; просто «пока не сделаю» — каждый час
-  const every = p.every || (p.nag ? (at.length === 1 ? 15 : 60) : null);
+  const before = dueTime && Array.isArray(p.before) ? p.before : [];
+  const every = p.every || (p.nag ? (at.length === 1 || before.length ? 15 : 60) : null);
   // «напомни позвонить маме в 18» — ровно в 18, а не за час
   if (p.remindWord && !every && !at.length && dueTime) at.push(zonedMs(day, dueTime, tz));
-  if (!at.length && !every) return null;
+  if (!at.length && !before.length && !every) return null;
   const deadline = dueKey ? zonedMs(dueKey, dueTime || '23:59', tz) : null;
   return normalizeReminder({
     at: at.map(iso),
+    before,
     every,
     // Повтор начинается с первого названного напоминания, а не с момента, когда задачу записали
     from: iso(every && at.length ? Math.min(...at) : now),
@@ -735,6 +769,15 @@ function reminderFromParse(p, { now, tz, quiet = DEFAULT_QUIET, dueKey = null, d
     tz,
   });
 }
+
+/** «30 мин», «1 ч», «1 день», «в момент» (0). */
+function beforeLabel(m) {
+  if (m === 0) return '0 мин';
+  if (m % 1440 === 0) return m === 1440 ? 'день' : `${m / 1440} дн.`;
+  if (m % 60 === 0) return `${m / 60} ч`;
+  return `${m} мин`;
+}
+const listRu = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} и ${xs[xs.length - 1]}` : xs[0] || '');
 
 /** Короткое описание правила: «каждый час с 10:00 до 19:00», «в 09:00, 14:00, 21:00». */
 function describeReminder(r, now, tz) {
@@ -747,6 +790,7 @@ function describeReminder(r, now, tz) {
       ? `${future.length > 1 ? `${future.length} раза: ` : ''}${dayLabel(localParts(future[0], tz).key, now, tz)} в ${future.map((t) => localParts(t, tz).hm).join(', ')}`
       : future.map((t) => `${dayLabel(localParts(t, tz).key, now, tz)} ${localParts(t, tz).hm}`).join(', '));
   }
+  if (r.before?.length) parts.push(`за ${listRu(r.before.map(beforeLabel))} до срока`);
   if (r.every) {
     const e = r.every;
     const step = e % 60 === 0 ? (e === 60 ? 'каждый час' : `каждые ${e / 60} ч`) : `каждые ${e} мин`;
@@ -759,6 +803,7 @@ if (typeof module !== 'undefined') {
   module.exports = {
     localParts, tzOffset, zonedMs, nextAlarm, nextEventAlarm, nextTaskAlarm,
     alarmSig, refreshAlarm, dueAlarms, alarmText, spreadTimes, reminderFromParse, describeReminder, inQuiet, dayLabel, nextKey,
+    taskSingles, taskAnchor, beforeLabel,
   };
 }
 

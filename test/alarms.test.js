@@ -193,3 +193,24 @@ test('«в 13:30 созвон, напомни в 13:20, повторяй, пок
   const oven = parseQuick('проверить духовку через 30 минут, повторяй', fromKey('2026-10-19'));
   assert.deepEqual([oven.title, oven.inMinutes, oven.nag], ['Проверить духовку', 30, true]);
 });
+
+test('«за 30, 15 и 5 минут до срока» и повтор после последнего', () => {
+  const now = at('2026-10-19', '09:00');
+  const task = normalizeTask({ id: 't', title: 'Созвон', due: '2026-10-19', time: '13:30', reminder: { before: [30, 15, 5], every: 10, from: new Date(now).toISOString(), tz: TZ } });
+  const seq = [];
+  for (let t = now, i = 0; i < 6; i++) { t = a.nextAlarm('task', task, t, TZ); seq.push(show(t).slice(11)); }
+  assert.deepEqual(seq, ['13:00', '13:15', '13:25', '13:35', '13:45', '13:55']);
+  assert.equal(a.describeReminder(task.reminder, now, TZ), 'за 30 мин, 15 мин и 5 мин до срока; каждые 10 мин, пока не сделано');
+  // Срок перенесли — напоминания переехали вместе с ним
+  const moved = { ...task, time: '15:00' };
+  assert.equal(show(a.nextAlarm('task', moved, now, TZ)).slice(11), '14:30');
+  // Текст за 15 минут
+  assert.equal(a.alarmText('task', task, at('2026-10-19', '13:15'), at('2026-10-19', '13:15'), TZ).body, 'Через 15 мин · сегодня, 13:30');
+  // Из фразы: событие с тремя напоминаниями до начала
+  const r = parseQuick('в 13:30 созвон, напомни за 30, 15 и 5 минут', fromKey('2026-10-19'));
+  assert.deepEqual([r.title, r.start, r.before], ['Созвон', '13:30', [30, 15, 5]]);
+  // Событие: точное время напоминания
+  const ev = normalizeEvent({ id: 'e', title: 'Кино', date: '2026-10-20', start: '19:00', reminds: [60], remindAt: [new Date(at('2026-10-19', '20:00')).toISOString()] });
+  assert.equal(show(a.nextAlarm('event', ev, now, TZ)), '2026-10-19 20:00');
+  assert.equal(show(a.nextAlarm('event', ev, at('2026-10-19', '20:00'), TZ)), '2026-10-20 18:00');
+});

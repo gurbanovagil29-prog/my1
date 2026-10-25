@@ -12,7 +12,7 @@
 
 /* global state, h, $, readJSON, writeJSON, toast, closeNav, sync, saveEvents, saveTasks, saveSettings, findEvent, findTask,
    colorOf, toggleTask, refreshAlarm, dueAlarms, alarmText, zonedMs, localParts, normalizeReminder, iso, DEFAULT_QUIET,
-   describeReminder, nextAlarm, STORE_KEY, TASKS_KEY, renderFooter, dayLabel, $$ */
+   describeReminder, nextAlarm, STORE_KEY, TASKS_KEY, renderFooter, dayLabel, $$, taskSingles, createRemindEditor */
 
 const ALARM_ACK_KEY = 'everyday-calendar:alarm-ack';
 const REMIND_OPTIONS = [[0, 'В начале'], [5, '5 мин'], [10, '10 мин'], [15, '15 мин'], [30, '30 мин'], [60, '1 час'], [120, '2 часа'], [1440, 'За день']];
@@ -482,105 +482,108 @@ function openQuietDialog() {
   $('#quietDialog').showModal();
 }
 
-/* ---------- Окно события: за сколько напомнить ---------- */
+/* ---------- Окно события: напоминания ---------- */
 
-let pickedReminds = new Set();
+let eventRemind = null;
+/** Событие из полей окна — для итога «Напомню: …» (задаёт app.js). */
+let currentEventDraft = () => null;
 
-function renderRemindChips() {
-  $('#fReminds').replaceChildren(...REMIND_OPTIONS.map(([m, label]) => h('button', {
-    class: 'remind-chip',
-    type: 'button',
-    'aria-pressed': String(pickedReminds.has(m)),
-    onclick: () => {
-      if (pickedReminds.has(m)) pickedReminds.delete(m);
-      else pickedReminds.add(m);
-      renderRemindChips();
-    },
-  }, label)));
+function eventRemindSummary(model) {
+  const ev = currentEventDraft();
+  if (!ev) return '';
+  const tz = userTz();
+  const now = Date.now();
+  const draftEv = { ...ev, reminds: model.before, remindAt: model.at.map(iso), snooze: null };
+  const list = [];
+  for (let t = now, i = 0; i < 5; i++) {
+    t = nextAlarm('event', draftEv, t, tz);
+    if (t == null) break;
+    list.push(t);
+  }
+  return list.length ? `🔔 Напомню: ${eventRemind.momentsText(list.slice(0, 4), now, tz)}${list.length > 4 ? '…' : ''}` : '🔕 Без напоминаний';
 }
 
-function setEditorReminds(list) {
-  pickedReminds = new Set(list);
-  renderRemindChips();
+function setEditorReminds(list, remindAt = [], getDraft = null) {
+  if (getDraft) currentEventDraft = getDraft;
+  eventRemind.set({ before: list, at: remindAt.map((s) => Date.parse(s)) });
 }
 
-const editorReminds = () => [...pickedReminds].sort((a, b) => b - a);
+const editorReminds = () => eventRemind.get().before;
+const editorRemindAt = () => eventRemind.get().at.map(iso);
+const refreshEventReminds = () => eventRemind?.refresh();
 
 /* ---------- Окно задачи: напоминания ---------- */
 
-const draft = { at: [], base: null };
+let taskRemind = null;
+let taskRemindBase = null; // правило задачи до правки: отсрочка и отсчёт повтора сохраняются
+let currentTaskDraft = () => ({});
 
-function fmtMoment(ms) {
+function taskRemindSummary() {
+  const d = currentTaskDraft();
   const tz = userTz();
-  const p = localParts(ms, tz);
-  const today = localParts(Date.now(), tz).key;
-  const tomorrow = localParts(Date.now() + 86400000, tz).key;
-  const day = p.key === today ? 'сегодня' : p.key === tomorrow ? 'завтра' : new Date(ms).toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short' });
-  return `${day}, ${p.hm}`;
-}
-
-function renderTaskReminderDraft(taskLike) {
   const now = Date.now();
-  $('#tAtList').replaceChildren(...draft.at.sort((a, b) => a - b).map((t) => h('span', { class: `remind-chip is-on${t < now ? ' is-past' : ''}` },
-    fmtMoment(t),
-    h('button', { type: 'button', 'aria-label': 'Убрать', onclick: () => { draft.at = draft.at.filter((x) => x !== t); renderTaskReminderDraft(currentTaskDraft()); } }, '✕'))));
-  $('#tWindowWrap').hidden = !$('#tEvery').value;
-  const rule = taskLike.reminder;
-  const next = nextAlarm('task', { ...taskLike, done: false }, now, userTz());
-  const hint = [];
-  if (next) hint.push(`Следующее: ${fmtMoment(next)}`);
-  if (rule) hint.push(describeReminder(rule, now, userTz()));
-  else if (taskLike.plan?.start) hint.push(`напомню в ${taskLike.plan.start}${taskLike.time ? ' и за час до срока, если не сделано' : ''}`);
-  else if (taskLike.time && taskLike.due && !taskLike.eventId) hint.push('Своих напоминаний нет — напомню за час до срока');
-  $('#tRemindHint').textContent = hint.filter(Boolean).join(' · ');
+  const rule = d.reminder;
+  if (!rule) {
+    if (d.plan?.start) return `🔔 Своих напоминаний нет — напомню в начале «Когда делаю» (${d.plan.start})${d.time ? ' и за час до срока, если не сделано' : ''}`;
+    if (d.time && d.due && !d.eventId) return '🔔 Своих напоминаний нет — напомню за час до срока';
+    return '🔕 Без напоминаний';
+  }
+  const task = { ...d, done: false };
+  const singles = taskSingles(task, tz).filter((t) => t > now).sort((a, b) => a - b);
+  const parts = [];
+  if (singles.length) parts.push(taskRemind.momentsText(singles.slice(0, 5), now, tz) + (singles.length > 5 ? '…' : ''));
+  if (rule.every) {
+    const e = rule.every;
+    const step = e % 60 === 0 ? (e === 60 ? 'каждый час' : `каждые ${e / 60} ч`) : `каждые ${e} мин`;
+    parts.push(`${singles.length ? 'потом ' : ''}${step}${rule.window ? ` с ${rule.window[0]} до ${rule.window[1]}` : ''}, пока не отметите`);
+  }
+  if (!parts.length) return '🔕 Все напоминания уже прошли';
+  return `🔔 Напомню: ${parts.join(', ')}`;
 }
 
-/** Правило из полей окна задачи. deadline — срок задачи { date, time } или null. */
-function buildTaskReminder(deadline) {
-  const every = $('#tEvery').value ? +$('#tEvery').value : null;
-  const from = $('#tWinFrom').value;
-  const to = $('#tWinTo').value;
-  const base = draft.base || {};
+/** Правило из раздела «Напоминания» окна задачи. */
+function buildTaskReminder() {
+  const m = taskRemind.get();
+  const base = taskRemindBase || {};
   const tz = userTz();
-  const until = every && deadline ? iso(zonedMs(deadline.date, deadline.time || '23:59', tz)) : null;
   return normalizeReminder({
-    at: draft.at.map(iso),
-    every,
+    at: m.at.map(iso),
+    before: m.before,
+    every: m.every,
     // Тот же интервал — продолжаем прежний отсчёт, новый — с этой минуты
-    from: every && base.every === every && base.from ? base.from : iso(Date.now()),
-    window: every && from && to && from < to ? [from, to] : null,
-    until,
-    keepAfter: Boolean(until),
+    from: m.every && base.every === m.every && base.from ? base.from : iso(Date.now()),
+    window: m.every ? m.window : null,
+    until: null,
+    keepAfter: false,
     snooze: base.snooze || null,
     quiet: quietHours(),
     tz,
   });
 }
 
-let currentTaskDraft = () => ({});
-
 function fillTaskReminder(task, getDraft) {
   currentTaskDraft = getDraft;
   const r = task.reminder;
-  draft.base = r;
-  draft.at = (r?.at || []).map((s) => Date.parse(s));
-  $('#tEvery').value = r?.every ? String(r.every) : '';
-  $('#tWinFrom').value = r?.window?.[0] || '';
-  $('#tWinTo').value = r?.window?.[1] || '';
-  $('#tAtInput').value = '';
-  renderTaskReminderDraft(getDraft());
+  taskRemindBase = r;
+  taskRemind.set({ before: r?.before || [], at: (r?.at || []).map((x) => Date.parse(x)), every: r?.every || null, window: r?.window || null });
 }
 
 function initTaskReminderFields() {
-  const update = () => renderTaskReminderDraft(currentTaskDraft());
-  $('#tAtAdd').addEventListener('click', () => {
-    const v = $('#tAtInput').value;
-    if (!v) return;
-    const [day, hm] = v.split('T');
-    const t = zonedMs(day, hm.slice(0, 5), userTz());
-    if (!draft.at.includes(t)) draft.at.push(t);
-    $('#tAtInput').value = '';
-    update();
+  taskRemind = createRemindEditor($('#tRemind'), {
+    kind: 'task',
+    anchor: () => {
+      const d = currentTaskDraft();
+      return d.due && d.time ? zonedMs(d.due, d.time, userTz()) : d.plan?.start ? zonedMs(d.plan.date, d.plan.start, userTz()) : null;
+    },
+    anchorHint: () => 'Укажите время срока или «Когда делаю» — тогда можно напоминать заранее',
+    summary: taskRemindSummary,
   });
-  for (const id of ['#tEvery', '#tWinFrom', '#tWinTo', '#tDue', '#tTime', '#tPlanDate', '#tPlanStart', '#tPlanEnd', '#tEvent']) $(id).addEventListener('change', update);
+  eventRemind = createRemindEditor($('#fRemind'), {
+    kind: 'event',
+    anchor: () => (currentEventDraft() ? 1 : null),
+    anchorHint: () => '',
+    summary: eventRemindSummary,
+  });
+  const update = () => taskRemind.refresh();
+  for (const id of ['#tDue', '#tTime', '#tPlanDate', '#tPlanStart', '#tPlanEnd', '#tEvent']) $(id).addEventListener('change', update);
 }
