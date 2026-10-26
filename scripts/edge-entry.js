@@ -34,7 +34,43 @@ const telegram = TELEGRAM_TOKEN ? {
     if (!data.ok) throw new Error(`Telegram ${method}: ${data.description}`);
     return data.result;
   },
+  /** Файл из Telegram (голосовое): сначала путь, потом сами байты. */
+  async download(fileId) {
+    const file = await this.call('getFile', { file_id: fileId });
+    const res = await fetch(`https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${file.file_path}`);
+    if (!res.ok) throw new Error(`Telegram file: ${res.status}`);
+    return new Uint8Array(await res.arrayBuffer());
+  },
 } : null;
+
+// Распознавание голосовых: Groq (бесплатный лимит) или OpenAI — какой ключ есть в секретах функции
+const GROQ_KEY = Deno.env.get('GROQ_API_KEY') || null;
+const OPENAI_KEY = Deno.env.get('OPENAI_API_KEY') || null;
+const stt = GROQ_KEY || OPENAI_KEY ? {
+  async transcribe(bytes, mime) {
+    const [url, key, model] = GROQ_KEY
+      ? ['https://api.groq.com/openai/v1/audio/transcriptions', GROQ_KEY, 'whisper-large-v3-turbo']
+      : ['https://api.openai.com/v1/audio/transcriptions', OPENAI_KEY, 'whisper-1'];
+    const form = new FormData();
+    form.append('file', new Blob([bytes], { type: mime }), mime.includes('ogg') ? 'voice.ogg' : 'voice.m4a');
+    form.append('model', model);
+    form.append('language', 'ru');
+    // Подсказка: так числа чаще пишутся цифрами
+    form.append('prompt', 'Завтра в 15:00 встреча с Аней. 25 октября в 10:30 защита проекта. Напомни за 15 минут.');
+    const res = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: form });
+    if (!res.ok) throw new Error(`speech-to-text: ${res.status} ${await res.text()}`);
+    return (await res.json()).text || '';
+  },
+} : null;
+
+/** Прогноз Open-Meteo для вечернего совета и утренней сводки. */
+const weather = {
+  async forecast(lat, lon, tz) {
+    const res = await fetch(weatherUrl(lat, lon, tz, 3));
+    if (!res.ok) throw new Error(`Open-Meteo: ${res.status}`);
+    return parseForecast(await res.json());
+  },
+};
 
 /** Секрет, которым Telegram подписывает запросы к webhook: выводится из токена, отдельно хранить не нужно. */
 async function webhookSecret() {
@@ -91,6 +127,15 @@ const db = {
     await rest('user_prefs?on_conflict=user_id', { method: 'POST', body: { user_id: userId, tz }, prefer: 'resolution=merge-duplicates' });
   },
   digestPrefs: quiet(() => rest('user_prefs?select=*&digest_time=not.is.null'), []),
+  weatherPrefs: quiet(() => rest('user_prefs?select=*&wx_lat=not.is.null&wx_eve=not.is.null'), []),
+  async claimWeather(userId, key) {
+    const rows = await rest(`user_prefs?user_id=eq.${q(userId)}&or=(wx_sent.is.null,wx_sent.lt.${q(key)})`,
+      { method: 'PATCH', body: { wx_sent: key }, prefer: 'return=representation' });
+    return rows.length > 0;
+  },
+  async updatePrefs(userId, patch) {
+    await rest(`user_prefs?user_id=eq.${q(userId)}`, { method: 'PATCH', body: { ...patch, updated_at: new Date().toISOString() } });
+  },
   async claimDigest(userId, key) {
     const rows = await rest(`user_prefs?user_id=eq.${q(userId)}&or=(digest_sent.is.null,digest_sent.lt.${q(key)})`,
       { method: 'PATCH', body: { digest_sent: key }, prefer: 'return=representation' });
@@ -121,6 +166,8 @@ const server = createReminderServer({
   actionUrl: `${SUPABASE_URL}/functions/v1/remind`,
   subject: Deno.env.get('VAPID_SUBJECT') || 'https://gurbanovagil29-prog.github.io/my1/',
   telegram,
+  weather,
+  stt,
 });
 
 const CORS = {

@@ -61,8 +61,14 @@ function agendaLine(it) {
   return it.allDay ? `весь день: ${it.title}` : `${time}${it.title}`;
 }
 
-/** Утренняя сводка: { title, body, lines } — заголовок и текст для push, строки для Telegram. */
-function digestMessage({ events, tasks, key }) {
+/** Утренняя сводка: { title, body, lines } — заголовок и текст для push, строки для Telegram. weather — строка погоды. */
+function digestMessage({ events, tasks, key, weather = '' }) {
+  const m = digestCore({ events, tasks, key });
+  if (!weather) return m;
+  return { ...m, body: `${m.body}\n${weather}`, lines: [weather, ...m.lines] };
+}
+
+function digestCore({ events, tasks, key }) {
   const { items, overdue } = dayAgenda({ events, tasks, key });
   const nEv = items.filter((i) => i.kind === 'event').length;
   const nTask = items.filter((i) => i.kind !== 'event').length;

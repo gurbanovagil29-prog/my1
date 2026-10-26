@@ -93,7 +93,7 @@ test('функция работает целиком: ключи, рассылк
     } finally {
       Date.now = realNow;
     }
-    assert.deepEqual(run, { due: 1, sent: 1, invites: 0, digests: 0 }); // таблиц из update-2.sql нет — эти части молчат
+    assert.deepEqual(run, { due: 1, sent: 1, invites: 0, digests: 0, weather: 0 }); // таблиц из update-2.sql и update-3.sql нет — эти части молчат
     assert.equal(store.items[0].data.alarmAt, '2026-10-18T11:00:00.000Z');
     assert.ok(calls.some((c) => c.startsWith('PATCH /rest/v1/items?user_id=eq.u1&kind=eq.task&id=eq.t1&data-%3E%3EalarmAt=eq.')), calls.join('\n'));
 

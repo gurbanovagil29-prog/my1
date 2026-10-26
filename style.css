@@ -338,6 +338,24 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .quick:focus-within { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
 .quick input { flex: 1; min-width: 0; border: 0; background: none; padding: 11px 0; outline: none; }
 .quick-preview { color: var(--accent); font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+.quick-voice, .quick-send {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-right: -6px;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  font-size: 18px;
+  line-height: 1;
+}
+.quick-voice:hover { background: var(--surface-2); }
+.quick-voice.is-listening { background: #e5484d; color: #fff; animation: listen 1.2s ease-in-out infinite; }
+@keyframes listen { 50% { box-shadow: 0 0 0 7px color-mix(in srgb, #e5484d 25%, transparent); } }
+.quick-send { background: var(--accent); color: var(--accent-text); font-size: 15px; }
+.quick-voice[hidden], .quick-send[hidden] { display: none; }
 
 /* ---------- Область вида ---------- */
 .view {
@@ -396,7 +414,7 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .cell:hover { background: var(--surface-2); }
 .cell.is-selected { box-shadow: inset 0 0 0 2px var(--accent); }
 .cell-head { display: flex; align-items: center; justify-content: space-between; padding: 0 2px 2px; }
-.cell-num { display: inline-grid; place-items: center; min-width: 26px; height: 26px; padding: 0 6px; border-radius: 13px; font-size: 13px; font-weight: 500; }
+.cell-num { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 26px; padding: 0 6px; border-radius: 13px; font-size: 13px; font-weight: 500; white-space: pre; }
 .cell.is-today .cell-num { background: var(--accent); color: var(--accent-text); font-weight: 700; }
 .cell-add {
   width: 24px;
@@ -411,6 +429,12 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   transition: opacity .1s;
 }
 .cell:hover .cell-add, .cell.is-selected .cell-add { opacity: 1; }
+/* Погода: ячейка подкрашена по температуре дня, у числа — значок и максимум */
+.cell.has-wx { background: linear-gradient(180deg, color-mix(in srgb, var(--wx) 24%, var(--surface)), color-mix(in srgb, var(--wx) 6%, var(--surface)) 70%); }
+.cell.has-wx:hover { background: linear-gradient(180deg, color-mix(in srgb, var(--wx) 32%, var(--surface)), color-mix(in srgb, var(--wx) 12%, var(--surface)) 70%); }
+.cell-head .cell-wx { display: inline-flex; align-items: center; gap: 1px; margin: 0 auto 0 4px; font-size: 11px; line-height: 1; white-space: nowrap; }
+.cell-wx b { font-weight: 600; color: var(--text); opacity: .8; }
+.tg-wx { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .more { flex: none; height: var(--more-h); border: 0; background: none; color: var(--muted); font-size: 12px; line-height: 1; text-align: left; padding: 0 6px; border-radius: 6px; }
 .more:hover { background: var(--line); color: var(--text); }
 
@@ -1379,3 +1403,91 @@ a.btn.primary { color: var(--accent-text); }
 .remind-row input[type="number"] { flex: 0 1 80px; }
 .remind-more summary { cursor: pointer; color: var(--accent); font-size: 13px; padding: 4px 0; }
 .remind-chip:disabled { opacity: .45; }
+
+/* ---------- Погода ---------- */
+.weather-dialog { width: min(560px, calc(100vw - 24px)); }
+.wx-where { margin: 4px 0 8px; }
+.wx-tabs { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-bottom: 12px; }
+.wx-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 2px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wx, var(--surface-2)) 14%, var(--surface));
+  color: var(--text);
+  font-size: 15px;
+}
+.wx-tab small { max-width: 100%; overflow: hidden; font-size: 10.5px; color: var(--muted); white-space: nowrap; text-overflow: clip; }
+.wx-tab b { font-size: 13px; }
+.wx-tab.is-active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.wx-advice { display: flex; flex-direction: column; gap: 10px; }
+.wx-summary { display: flex; align-items: center; gap: 12px; }
+.wx-summary > div { display: flex; flex-direction: column; gap: 2px; }
+.wx-big { font-size: 34px; line-height: 1; }
+.wx-phases { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
+.wx-phase { display: flex; flex-direction: column; align-items: center; padding: 6px; border-radius: 10px; background: color-mix(in srgb, var(--wx) 18%, var(--surface)); font-size: 13px; }
+.wx-phase small { color: var(--muted); }
+.wx-phase span { font-size: 12px; color: var(--muted); }
+.wx-layers { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.wx-layer { display: grid; grid-template-columns: 26px 92px 1fr; align-items: baseline; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 14px; }
+.wx-layer:last-child { border-bottom: 0; }
+.wx-layer small { color: var(--muted); }
+.wx-layer-icon { font-size: 16px; }
+.wx-carry, .wx-events { display: flex; flex-direction: column; gap: 3px; font-size: 14px; }
+.wx-events .is-note { font-weight: 500; }
+.wx-alerts { display: flex; flex-direction: column; gap: 4px; }
+.wx-alert { padding: 7px 10px; border-radius: 10px; background: color-mix(in srgb, #f5a524 18%, var(--surface)); font-size: 13px; }
+.wx-feedback { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); }
+.wx-feedback.is-done { flex-direction: row; align-items: center; gap: 8px; font-size: 14px; }
+.wx-feedback-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.wx-feedback-btns .is-active { border-color: var(--accent); color: var(--accent); }
+.wx-feedback.is-compact { gap: 6px; font-size: 14px; }
+.wx-feedback.is-compact .wx-feedback-btns { flex-wrap: nowrap; overflow-x: auto; }
+.wx-feedback.is-compact .btn { flex: none; padding: 5px 9px; font-size: 13px; }
+.wx-settings { margin-top: 10px; }
+.wx-settings > summary { cursor: pointer; padding: 8px 0; color: var(--muted); font-weight: 500; }
+.wx-place { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.dialog .wx-search { display: flex; flex-direction: row; gap: 6px; width: 100%; }
+.wx-search input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); color: var(--text); }
+.wx-settings .check { white-space: normal; }
+.wx-found { display: flex; flex-direction: column; width: 100%; }
+.wx-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 2px 0 6px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+}
+.wx-line-tip { flex: 1; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wx-card { display: flex; flex-direction: column; gap: 6px; margin: 4px 12px 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); }
+.wx-card.is-promo { flex-direction: row; align-items: center; gap: 8px; font-size: 14px; }
+.wx-card.is-promo > span { flex: 1; }
+.wx-card-main { display: flex; align-items: center; gap: 10px; padding: 0; border: 0; background: none; color: var(--text); text-align: left; }
+.wx-card-icon { font-size: 30px; line-height: 1; }
+.wx-card-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+.wx-card-text small { color: var(--muted); }
+.wx-card-more { color: var(--accent); font-size: 13px; white-space: nowrap; }
+.wx-card .wx-feedback { margin-top: 0; padding: 8px 0 0; background: none; border-top: 1px solid var(--line); border-radius: 0; }
+
+@media (max-width: 860px) {
+  .cell.has-wx .cell-add { display: none; }
+  .cell-head .cell-wx { font-size: 9.5px; margin: 0; letter-spacing: -.03em; }
+  .cell.has-wx .cell-head { gap: 1px; padding: 0 0 2px; }
+  .cell.has-wx .cell-num { min-width: 22px; height: 22px; padding: 0 3px; font-size: 12px; }
+  .cell.has-wx .cell-mon { display: none; }
+  .tg-wx { font-size: 9px; }
+  .wx-layer { grid-template-columns: 24px 1fr; row-gap: 0; }
+  .wx-layer-icon { grid-row: span 2; }
+  .wx-card-more { display: none; }
+  .quick-voice, .quick-send { width: 32px; height: 32px; }
+}

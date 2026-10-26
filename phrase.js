@@ -8,7 +8,7 @@
  */
 
 /* global parseQuick, normalizePlan, collect, addDays, fromKey, toKey, toMin, localParts, zonedMs, reminderFromParse,
-   describeReminder, dayLabel, DEFAULT_QUIET, endMinutes, fromMin, nextKey */
+   describeReminder, dayLabel, DEFAULT_QUIET, endMinutes, fromMin, nextKey, spokenNumbers */
 
 const PHRASE_TASK_PREFIX = /^\s*(?:задача|todo|\[\s?\])\s*[:\-–]?\s*/i;
 const phraseNorm = (t) => String(t).toLowerCase().replace(/ё/g, 'е');
@@ -127,7 +127,7 @@ function describePhraseItem({ kind, item, cal, linkTitle }, now, tz, calName) {
  * Возвращает момент (мс) в будущем или null, если не понятно.
  */
 function snoozeFromText(text, now, tz) {
-  const raw = String(text || '').trim();
+  const raw = spokenNumbers(String(text || '').trim()).replace(/^(?:через )?(\S+) минут[аы]?$/i, '$1');
   const todayKey = localParts(now, tz).key;
   const bare = raw.match(/^(\d{1,3})\s*(?:м|мин|минут[уы]?)?$/i);
   if (bare && +bare[1] > 0) return now + +bare[1] * 60000;

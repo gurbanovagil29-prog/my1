@@ -13,7 +13,8 @@
    upcomingOccurrences, scheduleOverlays, initOverlays, isDailySpan,
    layerCal, visibleLayerEvents, openFriendEvent, renderFriends, layerChips, initFriends, findConflicts,
    renderInviteField, resetInviteField, saveEventInvites, inviteBadge, scheduleOwnerReconcile, initInvites,
-   initNotifySettings, notifySettingsLabel, initOnboarding, initWeekShare, initInsights, openSlots, quickSlotQuery, quickSlotPreview, slotSettingsLabel */
+   initNotifySettings, notifySettingsLabel, initOnboarding, initWeekShare, initInsights, openSlots, quickSlotQuery, quickSlotPreview, slotSettingsLabel,
+   initWeather, wxForDay, monthWxBadge, weekWxBadge, dayWxLine, agendaWeatherCard, initVoice, syncQuickButtons */
 
 const STORE_KEY = 'everyday-calendar:events';
 const SETTINGS_KEY = 'everyday-calendar:settings';
@@ -419,14 +420,18 @@ function renderMonth() {
     else if (day < t) cls.push('is-past-day');
     if (sameDay(day, state.cursor)) cls.push('is-selected');
     if (wdIndex(day) >= 5) cls.push('is-weekend');
+    const wxDay = wxForDay(key, { month: true });
+    if (wxDay) cls.push('has-wx');
 
     const cell = h('div', {
       class: cls.join(' '),
       dataset: { date: key },
+      style: wxDay ? { '--wx': wxDay.color } : null,
       onclick: () => (sameDay(day, state.cursor) ? openDayDetails(day) : selectDay(day)),
     },
     h('div', { class: 'cell-head' },
-      h('span', { class: 'cell-num' }, day.getDate() === 1 ? `${day.getDate()} ${MONTHS_GEN[day.getMonth()].slice(0, 3)}` : day.getDate()),
+      h('span', { class: 'cell-num' }, day.getDate(), day.getDate() === 1 ? h('span', { class: 'cell-mon' }, ` ${MONTHS_GEN[day.getMonth()].slice(0, 3)}`) : null),
+      monthWxBadge(key),
       h('button', {
         class: 'cell-add',
         type: 'button',
@@ -591,6 +596,7 @@ function renderDayPanel(d) {
     h('div', { class: 'day-panel-head' },
       h('strong', {}, capitalize(relativeDay(d) || WD_FULL[wdIndex(d)]), `, ${formatDate(d, { weekday: false })}`),
       h('button', { class: 'cell-add', type: 'button', 'aria-label': 'Добавить событие', onclick: () => openEditor({ preset: { date: key } }) }, '+')),
+    dayWxLine(key),
     list.length
       ? list.map((o) => h('button', {
         class: `side-item${isPast(o.ev, o.key) ? ' is-past' : ''}`,
@@ -710,7 +716,7 @@ function renderTimeGrid(days) {
       class: `tg-day${sameDay(d, t) ? ' is-today' : ''}${d < t ? ' is-past-day' : ''}`,
       type: 'button',
       onclick: () => selectDay(d),
-    }, h('span', { class: 'tg-wd' }, WD_SHORT[wdIndex(d)]), h('span', { class: 'tg-num' }, d.getDate()))));
+    }, h('span', { class: 'tg-wd' }, WD_SHORT[wdIndex(d)]), h('span', { class: 'tg-num' }, d.getDate()), weekWxBadge(toKey(d)))));
 
   const lanes = spanLanes(days, allDayMap);
   const allDay = h('div', { class: 'tg-row tg-allday' }, h('div', { class: 'tg-allday-label' }, 'весь день'),
@@ -952,6 +958,8 @@ function renderAgenda() {
   const plans = plansByDay(from, to);
   const t = today();
   const wrap = h('div', { class: 'agenda' });
+  const wxCard = sameDay(from, t) ? agendaWeatherCard() : null;
+  if (wxCard) wrap.append(wxCard);
 
   for (const [key, list] of map) {
     const { planned, due: dayTasks } = dayTaskItems(key, plans, tasks);
@@ -979,7 +987,7 @@ function renderAgenda() {
       dayTasks.map((task) => taskLine(task)))));
   }
 
-  if (!wrap.childElementCount) {
+  if (wrap.childElementCount === (wxCard ? 1 : 0)) {
     wrap.append(h('div', { class: 'empty' },
       ...(state.calendars.some((c) => c.visible)
         ? [h('strong', {}, 'Ближайшие 60 дней свободны'), 'Добавьте событие кнопкой «Создать» или строкой быстрого добавления сверху.']
@@ -1524,6 +1532,7 @@ function quickDateLabel(r) {
 
 function updateQuickPreview() {
   const preview = $('#quickPreview');
+  syncQuickButtons();
   if (!quickInput.value.trim()) { preview.textContent = ''; return; }
   const slotQ = quickSlotQuery(quickInput.value);
   if (slotQ) { preview.textContent = quickSlotPreview(slotQ); return; }
@@ -2060,6 +2069,8 @@ initFriends();
 initInvites();
 initNotifySettings();
 initWeekShare();
+initWeather();
+initVoice();
 render();
 initReminders();
 runLocalAlarms();

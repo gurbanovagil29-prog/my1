@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="style.css">
   <script src="core.js" defer></script>
   <script src="alarms.js" defer></script>
+  <script src="weather.js" defer></script>
   <script src="insights.js" defer></script>
   <script src="sharing.js" defer></script>
   <script src="config.js" defer></script>
@@ -26,6 +27,8 @@
   <script src="notify-settings.js" defer></script>
   <script src="onboarding.js" defer></script>
   <script src="share-image.js" defer></script>
+  <script src="weather-ui.js" defer></script>
+  <script src="voice.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -43,6 +46,7 @@
       <div class="side-tools">
         <button class="btn side-tool" id="btnStats" type="button">📊 Статистика</button>
         <button class="btn side-tool" id="btnSlots" type="button">🔎 Свободное окно</button>
+        <button class="btn side-tool" id="btnWeather" type="button">🌦 Погода и что надеть</button>
       </div>
 
       <section class="mini" id="mini" aria-label="Мини-календарь"></section>
@@ -118,6 +122,8 @@
         <button type="button" class="quick-mode" id="quickMode" title="Что добавлять: событие или задачу (Tab в пустой строке)"></button>
         <input id="quickInput" placeholder="по пятницам в 19 спортзал #личное" aria-label="Быстрое добавление">
         <span class="quick-preview" id="quickPreview"></span>
+        <button type="button" class="quick-voice" id="quickVoice" title="Сказать голосом" aria-label="Сказать голосом" aria-pressed="false">🎤</button>
+        <button type="submit" class="quick-send" id="quickSend" title="Добавить (Enter)" aria-label="Добавить" hidden>➤</button>
         <div class="mention-list" id="mentionList" role="listbox" aria-label="События" hidden></div>
       </form>
 
@@ -309,6 +315,14 @@
     </div>
     <div id="statsBody"></div>
     <p class="muted small">Считаются события со временем и блоки «Когда делаю». Многодневное событие с началом и концом («всю неделю с 9 до 18») считается каждый день. События на весь день и поездки («с пятницы 19:00 до воскресенья 18:00») не учитываются, пересечения внутри одной категории считаются один раз.</p>
+  </dialog>
+
+  <dialog class="dialog weather-dialog" id="weatherDialog">
+    <div class="dialog-head">
+      <h2>🌦 Погода и что надеть</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <div id="weatherBody"></div>
   </dialog>
 
   <dialog class="dialog" id="slotsDialog">
@@ -522,7 +536,7 @@
       <li><b>#работа, #учёба, #личное</b> — календарь (можно начало названия: #раб)</li>
       <li><b>до пятницы, к понедельнику, до 25.10, до 18:00</b> — срок задачи; <b>!</b> или <b>важно</b> — важная</li>
     </ul>
-    <p class="muted">Enter — сохранить сразу, Shift+Enter — открыть полную форму. Кнопка слева в строке (или Tab в пустой строке) переключает «Событие / Задача»; строка, начинающаяся со слова «задача», всегда создаёт задачу.</p>
+    <p class="muted">Enter — сохранить сразу, Shift+Enter — открыть полную форму. Кнопка слева в строке (или Tab в пустой строке) переключает «Событие / Задача»; строка, начинающаяся со слова «задача», всегда создаёт задачу. 🎤 справа — сказать фразу голосом: числа словами тоже понимает («в пятнадцать тридцать», «полвосьмого»).</p>
   </dialog>
 
   <div class="toasts" id="toasts" aria-live="polite"></div>

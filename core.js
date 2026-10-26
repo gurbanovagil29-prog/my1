@@ -151,6 +151,100 @@ function applyPeriod(h, period) {
   return h;
 }
 
+/* ---------- Числа словами (голосовой ввод) ---------- */
+
+// Распознавание речи иногда пишет числа словами: «в пятнадцать тридцать», «полвосьмого», «двадцать пятого октября».
+// Переводим в цифры только там, где это время, дата или срок, — «три поросёнка» в названии не трогаем.
+const NUM_WORDS = {
+  ноль: 0, один: 1, одна: 1, одну: 1, два: 2, две: 2, три: 3, четыре: 4, пять: 5, шесть: 6, семь: 7, восемь: 8, девять: 9, десять: 10,
+  одиннадцать: 11, двенадцать: 12, тринадцать: 13, четырнадцать: 14, пятнадцать: 15, шестнадцать: 16, семнадцать: 17, восемнадцать: 18,
+  девятнадцать: 19, двадцать: 20, тридцать: 30, сорок: 40, пятьдесят: 50,
+};
+// Родительный и дательный: «с девяти до шести», «к двум», «без пятнадцати»
+const NUM_WORDS_GEN = {
+  одного: 1, одному: 1, двух: 2, двум: 2, трех: 3, трем: 3, четырех: 4, четырем: 4, пяти: 5, шести: 6, семи: 7, восьми: 8, девяти: 9, десяти: 10,
+  одиннадцати: 11, двенадцати: 12, тринадцати: 13, четырнадцати: 14, пятнадцати: 15, шестнадцати: 16, семнадцати: 17, восемнадцати: 18,
+  девятнадцати: 19, двадцати: 20, тридцати: 30, сорока: 40, пятидесяти: 50,
+};
+// Порядковые: «пятого», «двадцать первое», «полвосьмого»
+const ORD_STEMS = [
+  ['одиннадцат', 11], ['двенадцат', 12], ['тринадцат', 13], ['четырнадцат', 14], ['пятнадцат', 15], ['шестнадцат', 16], ['семнадцат', 17],
+  ['восемнадцат', 18], ['девятнадцат', 19], ['двадцат', 20], ['тридцат', 30], ['перв', 1], ['втор', 2], ['трет', 3], ['четверт', 4],
+  ['пят', 5], ['шест', 6], ['седьм', 7], ['восьм', 8], ['девят', 9], ['десят', 10],
+];
+
+function spokenNumbers(text) {
+  const norm = (w) => w.toLowerCase().replace(/ё/g, 'е');
+  const yo = (w) => w.replace(/е/g, '[её]');
+  const alt = (words) => [...words].sort((a, b) => b.length - a.length).map(yo).join('|');
+  const B = '(?<![а-яёa-z\\d])';
+  const E = '(?![а-яёa-z\\d])';
+  const UNITS = 'один|одна|одну|два|две|три|четыре|пять|шесть|семь|восемь|девять';
+  const CARD = `(?:(?:двадцать|тридцать|сорок|пятьдесят) (?:${UNITS})|${alt(Object.keys(NUM_WORDS))})`;
+  const GEN = `(?:(?:двадцати|тридцати|сорока|пятидесяти) (?:${alt(['одного', 'двух', 'трех', 'четырех', 'пяти', 'шести', 'семи', 'восьми', 'девяти'])})|${alt(Object.keys(NUM_WORDS_GEN))})`;
+  const ORD = `(?:(?:двадцать|тридцать) )?(?:${alt(ORD_STEMS.map(([st]) => st))})(?:ьего|ого|его|ье|ое|ый|ой)`;
+  const MONTH = '(?:январ|феврал|март|апрел|ма[яй]|июн|июл|август|сентябр|октябр|ноябр|декабр)[а-я]*';
+  const num = (w) => {
+    if (/^\d+$/.test(w)) return +w;
+    return norm(w).split(' ').reduce((sum, x) => sum + (NUM_WORDS[x] ?? NUM_WORDS_GEN[x] ?? NaN), 0);
+  };
+  const ord = (w) => {
+    const parts = norm(w).split(' ');
+    const tens = parts.length > 1 ? NUM_WORDS[parts[0]] : 0;
+    const last = parts[parts.length - 1];
+    const stem = ORD_STEMS.find(([st]) => last.startsWith(st));
+    return stem ? tens + stem[1] : NaN;
+  };
+  const re = (src) => new RegExp(src, 'giu');
+  let s = String(text);
+  // «полтора часа» → «90 минут»
+  s = s.replace(re(`${B}полтора часа${E}`), '90 минут');
+  // «полвосьмого», «половина девятого» → 7:30, 8:30
+  s = s.replace(re(`${B}(?:пол ?|половин[аеуы] )(${ORD})${E}`), (m, w) => {
+    const h = ord(w);
+    return h >= 1 && h <= 12 ? `${h === 1 ? 12 : h - 1}:30` : m;
+  });
+  // «без пятнадцати девять», «без четверти восемь», «без 10 7» → 8:45, 7:45, 6:50
+  s = s.replace(re(`${B}без (четверти|${GEN}|\\d{1,2})(?: минут)? (${CARD}|\\d{1,2})${E}`), (m, a, b) => {
+    const n = /^четверти$/i.test(a) ? 15 : num(a);
+    const h = num(b);
+    if (!(n >= 1 && n <= 30 && h >= 1 && h <= 24)) return m;
+    return `${h === 1 ? 12 : h - 1}:${pad(60 - n)}`;
+  });
+  // «двадцать пятого октября» → «25 октября»
+  s = s.replace(re(`${B}(${ORD})(?= ${MONTH}${E})`), (m, w) => {
+    const d = ord(w);
+    return d >= 1 && d <= 31 ? String(d) : m;
+  });
+  // «в три часа тридцать минут» → «в 3:30»
+  s = s.replace(re(`${B}(${CARD}|\\d{1,2}) час(?:а|ов)? (${CARD}|\\d{1,2}) минут[аы]?${E}`), (m, a, b) => {
+    const h = num(a); const mm = num(b);
+    return h >= 0 && h <= 23 && mm >= 0 && mm <= 59 ? `${h}:${pad(mm)}` : m;
+  });
+  // «в пятнадцать тридцать», «к девяти ноль пять» → «в 15:30», «к 9:05»
+  s = s.replace(re(`${B}(в|к|с|до|на) (${CARD}|${GEN}) (ноль (?:${UNITS})|${CARD})${E}`), (m, p, a, b) => {
+    const h = num(a);
+    const mm = /^ноль /i.test(b) ? num(b.split(' ')[1]) : num(b);
+    if (!(h >= 0 && h <= 23 && mm >= 0 && mm <= 59) || (!/^ноль /i.test(b) && mm < 10)) return m;
+    return `${p} ${h}:${pad(mm)}`;
+  });
+  // «в час ночи» — 1:00, «в час» и «в час дня» — 13:00, «в полночь» — 0:00
+  s = s.replace(re(`${B}(в|к) час ночи${E}`), '$1 1:00');
+  s = s.replace(re(`${B}(в|к) час(?: дня)?(?![а-яёa-z\\d]| \\d| (?:${CARD})${E})`), '$1 13:00');
+  s = s.replace(re(`${B}(в|к) полночь${E}`), '$1 0:00');
+  // Число перед единицей: «пять минут», «два часа», «три дня»
+  s = s.replace(re(`${B}(${CARD}|${GEN})(?= (?:минут|мин|час|недел|месяц|дн|день|сут)[а-я]*${E})`), (m, w) => {
+    const n = num(w);
+    return Number.isNaN(n) ? m : String(n);
+  });
+  // Время после предлога: «в девять», «с двух до пяти», «каждые десять» (кроме «один»: «в один клик»)
+  s = s.replace(re(`${B}(в|к|с|до|через|за|каждые) (${CARD}|${GEN})${E}`), (m, p, w) => {
+    const n = num(w);
+    return n >= 2 && n <= 59 ? `${p} ${n}` : m;
+  });
+  return s;
+}
+
 /**
  * Разбирает фразу вида «завтра в 15 встреча с Аней» или «по пятницам с 19 до 21 спортзал».
  * Возвращает { title, date, endDate, spanDays, start, end, repeat, allDay, tag, priority, matched }:
@@ -170,7 +264,7 @@ function parseQuick(input, base = today()) {
     // mention — «@защита»: к какому событию привязать задачу; range — время задано промежутком «с 19 до 23»
     mention: null, range: false,
   };
-  let s = ` ${String(input).replace(/\s+/g, ' ').trim()} `;
+  let s = ` ${spokenNumbers(String(input).replace(/\s+/g, ' ').trim())} `;
   const PERIOD = '(?: (утра|дня|вечера|ночи))?';
 
   // Каждое правило ищет фразу целиком (с границами по пробелам) и при успехе вырезает её из текста.
@@ -327,6 +421,8 @@ function parseQuick(input, base = today()) {
       const h2p = applyPeriod(h2, m[5]);
       if (h2p !== h2 && h1 < 12 && h1 + 12 <= h2p) h1 += 12;
       h2 = h2p;
+    } else if (h2 < h1 && h2 + 12 > h1 && h2 + 12 < 24) {
+      h2 += 12; // «с 9 до 6» — до 18:00
     }
     if (!validTime(h1, m1) || !validTime(h2, m2)) return false;
     r.start = `${pad(h1)}:${pad(m1)}`;
@@ -360,9 +456,10 @@ function parseQuick(input, base = today()) {
 
   // Время без предлога, но с двоеточием: «13:30 созвон»
   if (!r.start) {
-    take('(\\d{1,2}):(\\d{2})', (m) => {
-      if (!validTime(+m[1], +m[2])) return false;
-      r.start = `${pad(+m[1])}:${m[2]}`;
+    take(`(\\d{1,2}):(\\d{2})${PERIOD}`, (m) => {
+      const hh = applyPeriod(+m[1], m[3]);
+      if (!validTime(hh, +m[2])) return false;
+      r.start = `${pad(hh)}:${m[2]}`;
     });
   }
 
@@ -642,7 +739,7 @@ function normalizeTask(t) {
 if (typeof module !== 'undefined') {
   module.exports = {
     toKey, fromKey, addDays, addMonths, startOfWeek, wdIndex, toMin, fromMin, endMinutes, spanDays,
-    occursOn, collect, nextOccurrence, parseQuick, toICS, fromICS, normalizeEvent, taskDeadline, normalizeTask,
+    occursOn, collect, nextOccurrence, parseQuick, spokenNumbers, toICS, fromICS, normalizeEvent, taskDeadline, normalizeTask,
     normalizeReminder, normalizePlan, DEFAULT_QUIET, iso, parseIso, pad,
   };
 }
