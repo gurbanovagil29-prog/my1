@@ -370,6 +370,13 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   flex-direction: column;
 }
 
+/* Смена вида свайпом: новый вид въезжает с той стороны, куда листали */
+.view.slide-next { animation: slide-next .2s ease-out; }
+.view.slide-prev { animation: slide-prev .2s ease-out; }
+@keyframes slide-next { from { transform: translateX(40px); opacity: .4; } }
+@keyframes slide-prev { from { transform: translateX(-40px); opacity: .4; } }
+@media (prefers-reduced-motion: reduce) { .view.slide-next, .view.slide-prev { animation: none; } }
+
 /* ---------- Месяц ---------- */
 .month-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .month-head { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); overflow: hidden; scrollbar-gutter: stable; }

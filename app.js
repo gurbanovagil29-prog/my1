@@ -1966,7 +1966,20 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Свайпы влево/вправо на телефоне листают период
+// Свайпы влево/вправо на телефоне переключают вид: месяц ⇄ неделя ⇄ список ⇄ задачи
+function swipeView(dir) {
+  const next = VIEWS[VIEWS.indexOf(state.view) + dir];
+  if (!next) return;
+  setView(next);
+  const view = $('#view');
+  view.classList.remove('slide-next', 'slide-prev');
+  void view.offsetWidth; // перезапуск анимации
+  view.classList.add(dir > 0 ? 'slide-next' : 'slide-prev');
+}
+$('#view').addEventListener('animationend', (e) => {
+  if (e.target === e.currentTarget) e.currentTarget.classList.remove('slide-next', 'slide-prev');
+});
+
 let touchStart = null;
 $('#view').addEventListener('touchstart', (e) => {
   touchStart = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
@@ -1976,7 +1989,7 @@ $('#view').addEventListener('touchend', (e) => {
   const dx = e.changedTouches[0].clientX - touchStart.x;
   const dy = e.changedTouches[0].clientY - touchStart.y;
   touchStart = null;
-  if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.5) go(dx < 0 ? 1 : -1);
+  if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.5) swipeView(dx < 0 ? 1 : -1);
 });
 
 // Изменения из другой вкладки
