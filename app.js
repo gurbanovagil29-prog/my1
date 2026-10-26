@@ -14,7 +14,7 @@
    layerCal, visibleLayerEvents, openFriendEvent, renderFriends, layerChips, initFriends, findConflicts,
    renderInviteField, resetInviteField, saveEventInvites, inviteBadge, scheduleOwnerReconcile, initInvites,
    initNotifySettings, notifySettingsLabel, initOnboarding, initWeekShare, initInsights, openSlots, quickSlotQuery, quickSlotPreview, slotSettingsLabel,
-   initWeather, wxForDay, monthWxBadge, weekWxBadge, dayWxLine, agendaWeatherCard, initVoice, syncQuickButtons */
+   initWeather, wxForDay, monthWxBadge, weekWxBadge, agendaWeatherCard, initVoice, syncQuickButtons */
 
 const STORE_KEY = 'everyday-calendar:events';
 const SETTINGS_KEY = 'everyday-calendar:settings';
@@ -350,11 +350,9 @@ function goToday() {
   render();
 }
 
-/** Все дела дня: на телефоне — панель под месяцем, на большом экране — неделя с этим днём. */
+/** Все дела дня: на телефоне — список с этого дня, на большом экране — неделя с этим днём. */
 function openDayDetails(day) {
-  const phone = window.matchMedia('(max-width: 860px)').matches;
-  selectDay(day, phone ? null : 'week');
-  if (phone) $('.day-panel')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  selectDay(day, window.matchMedia('(max-width: 860px)').matches ? 'agenda' : 'week');
 }
 
 function selectDay(d, view) {
@@ -462,7 +460,6 @@ function renderMonth() {
   const scroller = h('div', { class: 'month-scroll', onscroll: onMonthScroll }, grid);
   return [
     h('div', { class: 'month-wrap' }, h('div', { class: 'month-head' }, WD_SHORT.map((w) => h('div', { class: 'month-wd' }, w))), scroller),
-    renderDayPanel(state.cursor),
   ];
 }
 
@@ -584,30 +581,6 @@ function fitMonthCells(view) {
       more.textContent = `ещё ${n}`;
     }
   });
-}
-
-/** Список событий выбранного дня под месяцем — виден на телефоне. */
-function renderDayPanel(d) {
-  const key = toKey(d);
-  const list = collect(visibleEvents(), d, d).get(key);
-  const { planned, due } = dayTaskItems(key, plansByDay(d, d), tasksByDay(d, d));
-  const tasks = [...planned, ...due];
-  return h('div', { class: 'day-panel' },
-    h('div', { class: 'day-panel-head' },
-      h('strong', {}, capitalize(relativeDay(d) || WD_FULL[wdIndex(d)]), `, ${formatDate(d, { weekday: false })}`),
-      h('button', { class: 'cell-add', type: 'button', 'aria-label': 'Добавить событие', onclick: () => openEditor({ preset: { date: key } }) }, '+')),
-    dayWxLine(key),
-    list.length
-      ? list.map((o) => h('button', {
-        class: `side-item${isPast(o.ev, o.key) ? ' is-past' : ''}`,
-        type: 'button',
-        style: { '--c': colorOf(o.ev) },
-        onclick: () => openEditor({ ev: o.ev, key: o.key }),
-      }, h('span', {}, o.ev.title, progressBadge(o.ev, o.key), h('small', {}, formatTime(o.ev, o.key)))))
-      : null,
-    planned.map((task) => taskLine(task, { asPlan: true })),
-    due.map((task) => taskLine(task)),
-    list.length || tasks.length ? null : h('div', { class: 'side-empty' }, 'Свободный день'));
 }
 
 /**
@@ -1993,7 +1966,20 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Свайпы влево/вправо на телефоне листают период
+// Свайпы влево/вправо на телефоне переключают вид: месяц ⇄ неделя ⇄ список ⇄ задачи
+function swipeView(dir) {
+  const next = VIEWS[VIEWS.indexOf(state.view) + dir];
+  if (!next) return;
+  setView(next);
+  const view = $('#view');
+  view.classList.remove('slide-next', 'slide-prev');
+  void view.offsetWidth; // перезапуск анимации
+  view.classList.add(dir > 0 ? 'slide-next' : 'slide-prev');
+}
+$('#view').addEventListener('animationend', (e) => {
+  if (e.target === e.currentTarget) e.currentTarget.classList.remove('slide-next', 'slide-prev');
+});
+
 let touchStart = null;
 $('#view').addEventListener('touchstart', (e) => {
   touchStart = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
@@ -2003,7 +1989,7 @@ $('#view').addEventListener('touchend', (e) => {
   const dx = e.changedTouches[0].clientX - touchStart.x;
   const dy = e.changedTouches[0].clientY - touchStart.y;
   touchStart = null;
-  if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.5) go(dx < 0 ? 1 : -1);
+  if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.5) swipeView(dx < 0 ? 1 : -1);
 });
 
 // Изменения из другой вкладки

@@ -2,7 +2,7 @@
 
 /*
  * Погода в календаре: значок и температура в месяце и неделе (ячейка подкрашена по температуре),
- * окно «🌦 Погода» с советом «что надеть», карточка в «Списке», строка под месяцем на телефоне,
+ * окно «🌦 Погода» с советом «что надеть», карточка в «Списке»,
  * вопрос «Как было по одежде?» и точность прогноза. Сами советы считает weather.js.
  *
  * Место, «мёрзну / как все / жарко», ответы и время вечернего совета хранятся в настройках календаря,
@@ -238,17 +238,6 @@ function monthWxBadge(key) {
 function weekWxBadge(key) {
   const w = wxForDay(key);
   return w ? h('span', { class: 'tg-wx', title: w.text }, `${w.icon} ${deg(w.tmax)}/${deg(w.tmin)}`) : null;
-}
-
-/** Строка под месяцем на телефоне: «🌧 +4…+11° · дождь 14–17 · куртка, зонт ›». */
-function dayWxLine(key) {
-  const a = wxAdvice(key);
-  if (!a) return null;
-  const rain = a.notes.filter((n) => /дождь|снег/.test(n)).map((n) => n.replace(/^\S+ /, ''));
-  return h('button', { class: 'wx-line', type: 'button', onclick: () => openWeather(key) },
-    h('span', {}, `${a.icon} ${fmtRange(a.temp[0], a.temp[1])}${rain.length ? ` · ${rain.join(', ')}` : ''}`),
-    h('span', { class: 'wx-line-tip' }, `👕 ${a.short}`),
-    h('span', { 'aria-hidden': 'true' }, '›'));
 }
 
 /** Какой день спросить «Как было по одежде?»: сегодня после 14:00, утром — вчера, если не ответили. */

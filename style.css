@@ -370,6 +370,13 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   flex-direction: column;
 }
 
+/* Смена вида свайпом: новый вид въезжает с той стороны, куда листали */
+.view.slide-next { animation: slide-next .2s ease-out; }
+.view.slide-prev { animation: slide-prev .2s ease-out; }
+@keyframes slide-next { from { transform: translateX(40px); opacity: .4; } }
+@keyframes slide-prev { from { transform: translateX(-40px); opacity: .4; } }
+@media (prefers-reduced-motion: reduce) { .view.slide-next, .view.slide-prev { animation: none; } }
+
 /* ---------- Месяц ---------- */
 .month-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .month-head { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); overflow: hidden; scrollbar-gutter: stable; }
@@ -1130,7 +1137,6 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: va
 
 /* ---------- Мобильные ---------- */
 .backdrop { display: none; }
-.day-panel { display: none; }
 
 @media (max-width: 860px) {
   .app { grid-template-columns: 1fr; }
@@ -1206,16 +1212,6 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: va
   .quick input::placeholder { font-size: 14px; }
   .chip-title { text-overflow: clip; }
   .more { font-size: 10px; padding: 0 3px; text-align: center; }
-  .day-panel {
-    display: block;
-    flex: 0 0 auto;
-    max-height: 38%;
-    overflow-y: auto;
-    padding: 10px 12px;
-    border-top: 1px solid var(--line-strong);
-  }
-  .day-panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
-  .day-panel .cell-add { display: inline-grid; place-items: center; opacity: 1; width: 30px; height: 30px; }
   .month-wd { padding: 6px 4px; text-align: center; }
   .tg-row, .tg-body { grid-template-columns: 42px repeat(var(--cols), minmax(0, 1fr)); }
   .tg-ev { padding: 2px 3px; font-size: 11px; }
@@ -1454,21 +1450,6 @@ a.btn.primary { color: var(--accent-text); }
 .wx-search input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); color: var(--text); }
 .wx-settings .check { white-space: normal; }
 .wx-found { display: flex; flex-direction: column; width: 100%; }
-.wx-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  margin: 2px 0 6px;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: 10px;
-  background: var(--surface-2);
-  color: var(--text);
-  font-size: 13px;
-  text-align: left;
-}
-.wx-line-tip { flex: 1; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wx-card { display: flex; flex-direction: column; gap: 6px; margin: 4px 12px 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); }
 .wx-card.is-promo { flex-direction: row; align-items: center; gap: 8px; font-size: 14px; }
 .wx-card.is-promo > span { flex: 1; }
