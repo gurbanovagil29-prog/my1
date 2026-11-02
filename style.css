@@ -264,6 +264,8 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 
 .side-footer { margin-top: auto; display: flex; flex-direction: column; gap: 2px; border-top: 1px solid var(--line); padding-top: 10px; }
 .side-more summary { list-style: none; }
+/* Скрытые заметки: строка выглядит как номер версии */
+.side-version { align-self: flex-start; margin-top: 6px; padding: 4px 10px; border: 0; background: none; color: var(--muted); opacity: .45; font-size: 11px; }
 .side-more summary::-webkit-details-marker { display: none; }
 .side-more[open] summary { color: var(--text); }
 .side-more .link-btn:not(summary) { padding-left: 20px; font-size: 13px; }
@@ -1472,3 +1474,24 @@ a.btn.primary { color: var(--accent-text); }
   .wx-card-more { display: none; }
   .quick-voice, .quick-send { width: 32px; height: 32px; }
 }
+
+/* ---------- Заметки ---------- */
+.memo-dialog { width: min(720px, calc(100vw - 24px)); height: min(820px, calc(100dvh - 24px)); }
+.memo-dialog[open] { display: flex; flex-direction: column; gap: 10px; }
+.memo-dialog .dialog-head small { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.memo-text {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+}
+.memo-text:focus { border-color: var(--accent); }

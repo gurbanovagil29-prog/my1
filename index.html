@@ -29,6 +29,7 @@
   <script src="share-image.js" defer></script>
   <script src="weather-ui.js" defer></script>
   <script src="voice.js" defer></script>
+  <script src="memo.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -88,6 +89,7 @@
         </details>
         <button class="link-btn" id="btnOnboarding" type="button">❓ Как пользоваться</button>
         <button class="link-btn" id="btnHelp" type="button">Горячие клавиши</button>
+        <button class="side-version" id="btnMemo" type="button">Версия 3.4.2</button>
       </footer>
     </aside>
     <div class="backdrop" id="backdrop"></div>
@@ -315,6 +317,15 @@
     </div>
     <div id="statsBody"></div>
     <p class="muted small">Считаются события со временем и блоки «Когда делаю». Многодневное событие с началом и концом («всю неделю с 9 до 18») считается каждый день. События на весь день и поездки («с пятницы 19:00 до воскресенья 18:00») не учитываются, пересечения внутри одной категории считаются один раз.</p>
+  </dialog>
+
+  <dialog class="dialog memo-dialog" id="memoDialog">
+    <div class="dialog-head">
+      <h2>Заметки</h2>
+      <small class="muted" id="memoStatus"></small>
+      <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <textarea id="memoText" class="memo-text" spellcheck="false" aria-label="Заметки" placeholder="Пишите что угодно — сохраняется само"></textarea>
   </dialog>
 
   <dialog class="dialog weather-dialog" id="weatherDialog">
