@@ -14,7 +14,7 @@
    layerCal, visibleLayerEvents, openFriendEvent, renderFriends, layerChips, initFriends, findConflicts,
    renderInviteField, resetInviteField, saveEventInvites, inviteBadge, scheduleOwnerReconcile, initInvites,
    initNotifySettings, notifySettingsLabel, initOnboarding, initWeekShare, initInsights, openSlots, quickSlotQuery, quickSlotPreview, slotSettingsLabel,
-   initWeather, wxForDay, monthWxBadge, weekWxBadge, agendaWeatherCard, initVoice, syncQuickButtons */
+   initWeather, wxForDay, monthWxBadge, weekWxBadge, agendaWeatherCard, initVoice, syncQuickButtons, initMemo, memoText, readMemo, writeMemo */
 
 const STORE_KEY = 'everyday-calendar:events';
 const SETTINGS_KEY = 'everyday-calendar:settings';
@@ -1854,7 +1854,7 @@ function download(name, text, type) {
 }
 
 $('#btnExportJson').addEventListener('click', () => {
-  download(`calendar-${toKey(today())}.json`, JSON.stringify({ version: 3, calendars: state.calendars, events: state.events, tasks: state.tasks }, null, 2), 'application/json');
+  download(`calendar-${toKey(today())}.json`, JSON.stringify({ version: 3, calendars: state.calendars, events: state.events, tasks: state.tasks, memo: memoText() || undefined }, null, 2), 'application/json');
 });
 
 $('#btnExportIcs').addEventListener('click', () => {
@@ -1879,6 +1879,8 @@ $('#importFile').addEventListener('change', async (e) => {
       incoming = (Array.isArray(data) ? data : data.events || []).map(normalizeEvent);
       calendars = (data.calendars || []).map(normalizeCalendar).filter(Boolean);
       tasks = (data.tasks || []).map(normalizeTask).filter(Boolean);
+      // Заметки из копии — только если здесь их ещё нет, чтобы не затереть
+      if (typeof data.memo === 'string' && data.memo && !memoText()) writeMemo({ ...readMemo(), text: data.memo, at: Date.now() });
     }
     incoming = incoming.filter(Boolean);
     if (!incoming.length && !tasks.length) return toast('В файле не найдено событий');
@@ -2057,6 +2059,7 @@ initNotifySettings();
 initWeekShare();
 initWeather();
 initVoice();
+initMemo();
 render();
 initReminders();
 runLocalAlarms();
