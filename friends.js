@@ -7,7 +7,7 @@
  */
 
 /* global state, sync, h, $, $$, toast, render, saveSettings, closeNav, formatDate, formatTime, capitalize, fromKey, relativeDay, plural,
-   COLORS, SHARE_LEVELS, normalizeShareSettings, buildLayer, nameMatches, inviteEvents, openInviteCard, loadInvites, inviteRows */
+   COLORS, SHARE_LEVELS, normalizeShareSettings, buildLayer, nameMatches, inviteEvents, openInviteCard, loadInvites, inviteRows, notify */
 
 const EXPIRY_DAYS = { 1: '1 день', 7: '7 дней', 30: '30 дней' };
 
@@ -35,6 +35,55 @@ const visibleLayerEvents = () => [
   ...(state.layers || []).filter((l) => l.visible).flatMap((l) => l.events),
   ...(typeof inviteEvents === 'function' ? inviteEvents() : []), // приглашения, на которые ещё не ответили
 ];
+
+/* ---------- Свои имена для друзей ---------- */
+
+// Имя хранится по человеку (u:<id>), а не по доступу: если друг пришлёт приглашение заново, имя останется.
+// Ссылки — по токену. Хранится в настройках и, если выполнен update-5.sql, в аккаунте — на всех устройствах.
+const aliasKey = (l) => (l.type === 'friend' && l.ownerId ? `u:${l.ownerId}` : l.key);
+const friendAlias = (key) => state.settings.friendNames?.[key] || '';
+/** Как показывать человека: своё имя, если задано, иначе — как он сам подписался. */
+const friendLabel = (userId, fallback) => friendAlias(`u:${userId}`) || fallback || 'Друг';
+
+function applyAliases() {
+  for (const l of state.layers || []) {
+    l.origName ||= l.name;
+    l.name = friendAlias(aliasKey(l)) || l.origName;
+  }
+}
+
+async function saveFriendNames() {
+  saveSettings();
+  if (!sync.client || !sync.user || typeof notify === 'undefined' || !notify.prefs || !('friend_names' in notify.prefs)) return;
+  const { data, error } = await sync.client.from('user_prefs')
+    .upsert({ user_id: sync.user.id, friend_names: { ...(state.settings.friendNames || {}) } }, { onConflict: 'user_id' }).select();
+  if (error) toast(`Имя сохранено только на этом устройстве: ${error.message}`);
+  else notify.prefs = data?.[0] || notify.prefs;
+}
+
+function renameLayer(l) {
+  const name = prompt(`Как подписать «${l.origName || l.name}»? Пусто — вернуть как было.`, friendAlias(aliasKey(l)) || l.name);
+  if (name === null) return;
+  state.settings.friendNames ||= {};
+  const clean = name.trim().slice(0, 40);
+  if (clean && clean !== l.origName) state.settings.friendNames[aliasKey(l)] = clean;
+  else delete state.settings.friendNames[aliasKey(l)];
+  applyAliases();
+  saveFriendNames();
+  render();
+}
+
+/** Имена из аккаунта (после входа): с другого устройства. */
+function onFriendNamesPrefs(p) {
+  if (!p || !('friend_names' in p)) return;
+  const server = p.friend_names && typeof p.friend_names === 'object' ? p.friend_names : {};
+  const local = state.settings.friendNames || {};
+  if (Object.keys(server).length) state.settings.friendNames = server;
+  else if (Object.keys(local).length) { saveFriendNames(); return; } // задали до входа — переносим в аккаунт
+  saveSettings();
+  applyAliases();
+  render();
+}
 
 const shareLink = (token) => `${location.origin}${location.pathname}?share=${token}`;
 const myShareName = () => state.settings.shareName || (sync.user?.email || '').split('@')[0] || 'Я';
@@ -101,6 +150,7 @@ function loadLayers() {
       const link = links.find((x) => l.type === 'link' && x.token === l.token);
       if (link && !l.error && link.name !== l.name) { link.name = l.name; changed = true; }
     }
+    applyAliases();
     if (changed) saveSettings();
     friends.loadedAt = Date.now();
     if (typeof loadInvites === 'function') await loadInvites();
@@ -138,6 +188,7 @@ async function removeLayer(l) {
     const { error } = await sync.client.from('shares').delete().eq('id', l.shareId);
     if (error) return toast(`Не получилось: ${error.message}`);
   }
+  if (l.type === 'link') delete state.settings.friendNames?.[aliasKey(l)];
   delete state.settings.layerColors?.[l.key];
   delete state.settings.layerHidden?.[l.key];
   saveSettings();
@@ -150,7 +201,7 @@ async function answerInvite(inv, accept) {
     ? await sync.client.rpc('accept_share', { p_id: inv.id })
     : await sync.client.from('shares').delete().eq('id', inv.id);
   if (error) return toast(`Не получилось: ${error.message}`);
-  toast(accept ? `Теперь вы видите календарь: ${inv.owner_name || 'друг'}` : 'Приглашение отклонено');
+  toast(accept ? `Теперь вы видите календарь: ${friendLabel(inv.owner, inv.owner_name || 'друг')}` : 'Приглашение отклонено');
   await loadLayers();
 }
 
@@ -160,7 +211,7 @@ function renderFriends() {
   $('#friendsSection').hidden = !sync.client;
   const rows = [
     ...friends.invites.map((inv) => h('div', { class: 'invite-row' },
-      h('span', {}, h('strong', {}, inv.owner_name || 'Друг'), ' показывает вам свой календарь'),
+      h('span', {}, h('strong', {}, friendLabel(inv.owner, inv.owner_name)), ' показывает вам свой календарь'),
       h('div', { class: 'invite-actions' },
         h('button', { class: 'btn primary small', type: 'button', onclick: () => answerInvite(inv, true) }, 'Принять'),
         h('button', { class: 'btn small', type: 'button', onclick: () => answerInvite(inv, false) }, 'Отклонить')))),
@@ -173,6 +224,7 @@ function renderFriends() {
       h('input', { type: 'checkbox', role: 'switch', checked: l.visible, disabled: Boolean(l.error), onchange: (e) => setLayerVisible(l.key, e.target.checked) }),
       h('span', { class: 'switch-track' }),
       h('span', { class: 'cal-name' }, l.type === 'link' ? '🔗 ' : '👤 ', l.name, l.error ? ' ⚠︎' : '')),
+    h('button', { class: 'cal-action', type: 'button', title: 'Переименовать', 'aria-label': `Переименовать «${l.name}»`, onclick: () => renameLayer(l) }, '✎'),
     h('button', { class: 'cal-action', type: 'button', title: 'Другой цвет', onclick: () => cycleLayerColor(l.key) }, '🎨'),
     h('button', { class: 'cal-action', type: 'button', title: 'Убрать', 'aria-label': `Убрать «${l.name}»`, onclick: () => removeLayer(l) }, '✕'))),
   ];
@@ -448,12 +500,16 @@ function initFriends() {
 
 /** Друзья, которых можно пригласить на событие: показывают мне свой календарь или видят мой. */
 function friendPeople() {
+  // name — как показывать у себя (со своим именем), origName — как человек подписался сам: оно уходит в приглашение,
+  // которое видит и он, поэтому своё имя для него туда не попадает
   const people = new Map();
-  for (const l of state.layers || []) if (l.type === 'friend' && l.ownerId) people.set(l.ownerId, l.name);
+  for (const l of state.layers || []) if (l.type === 'friend' && l.ownerId) people.set(l.ownerId, { name: l.name, origName: l.origName || l.name });
   for (const s of friends.mine || []) {
-    if (s.kind === 'friend' && s.accepted && s.viewer && !people.has(s.viewer)) people.set(s.viewer, s.label || s.email);
+    if (s.kind === 'friend' && s.accepted && s.viewer && !people.has(s.viewer)) {
+      people.set(s.viewer, { name: friendLabel(s.viewer, s.label || s.email), origName: s.label || s.email });
+    }
   }
-  return [...people].map(([id, name]) => ({ id, name }));
+  return [...people].map(([id, p]) => ({ id, ...p }));
 }
 
 /** Слой для совместного поиска окна: «с Аней» → ключ слоя. */
