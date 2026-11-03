@@ -322,10 +322,11 @@
   <dialog class="dialog memo-dialog" id="memoDialog">
     <div class="dialog-head">
       <h2>Заметки</h2>
-      <small class="muted" id="memoStatus"></small>
+      <button type="button" class="btn small" id="memoCopy">📋 Скопировать всё</button>
       <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
     </div>
     <textarea id="memoText" class="memo-text" spellcheck="false" aria-label="Заметки" placeholder="Пишите что угодно — сохраняется само"></textarea>
+    <small class="muted memo-status" id="memoStatus"></small>
   </dialog>
 
   <dialog class="dialog weather-dialog" id="weatherDialog">

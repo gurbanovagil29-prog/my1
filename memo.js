@@ -8,7 +8,7 @@
  * версия с другого устройства дописывается ниже.
  */
 
-/* global sync, $, closeNav */
+/* global sync, $, closeNav, toast */
 
 const MEMO_KEY = 'everyday-calendar:memo';
 const memo = { timer: null, server: 'unknown', saving: null };
@@ -83,6 +83,24 @@ function onMemoInput() {
   memo.timer = setTimeout(async () => { memo.timer = null; await pushMemo(); memoStatusIdle(); }, 1000);
 }
 
+/** «Скопировать всё» — для телефона, где выделять длинный текст неудобно. */
+async function copyMemo() {
+  const area = $('#memoText');
+  const text = area.value;
+  if (!text) { toast('Заметки пустые'); return; }
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Старые браузеры и iOS без доступа к буферу: выделяем текст и копируем по-старому
+    area.focus();
+    area.setSelectionRange(0, text.length);
+    if (!document.execCommand('copy')) { toast('Не получилось — текст выделен, скопируйте вручную'); return; }
+    area.setSelectionRange(text.length, text.length);
+    area.blur();
+  }
+  toast(`📋 Скопировано: ${text.length.toLocaleString('ru-RU')} знаков`);
+}
+
 async function openMemo() {
   closeNav();
   $('#memoText').value = memoText();
@@ -95,6 +113,7 @@ async function openMemo() {
 function initMemo() {
   $('#btnMemo').addEventListener('click', openMemo);
   $('#memoText').addEventListener('input', onMemoInput);
+  $('#memoCopy').addEventListener('click', copyMemo);
   $('#memoDialog').addEventListener('close', () => {
     if (!memo.timer) return;
     clearTimeout(memo.timer);

@@ -1478,7 +1478,8 @@ a.btn.primary { color: var(--accent-text); }
 /* ---------- Заметки ---------- */
 .memo-dialog { width: min(720px, calc(100vw - 24px)); height: min(820px, calc(100dvh - 24px)); }
 .memo-dialog[open] { display: flex; flex-direction: column; gap: 10px; }
-.memo-dialog .dialog-head small { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.memo-status { margin-top: -4px; font-size: 12px; }
+.memo-dialog .dialog-head .btn { flex: none; white-space: nowrap; }
 .memo-text {
   flex: 1;
   width: 100%;
