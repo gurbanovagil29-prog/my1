@@ -9,7 +9,7 @@
 
 /* global state, sync, h, $, toast, render, saveEvents, findEvent, uid, formatDate, formatTime, capitalize, fromKey, toKey,
    relativeDay, shortDate, endMinutes, fromMin, defaultCal, calOf, friendPeople, myShareName, normalizeEvent, colorOf,
-   readJSON, writeJSON */
+   readJSON, writeJSON, friendLabel */
 
 const INVITE_COPIES_KEY = 'everyday-calendar:invite-copies';
 const STATUS_LABEL = { pending: 'ждём ответа', accepted: 'придёт ✓', maybe: 'может быть ?', declined: 'не сможет ✕', cancelled: 'отменено' };
@@ -87,7 +87,7 @@ function reconcileIncoming() {
       copy.invite = { ...copy.invite, cancelled: true };
       copy.title = `Отменено: ${copy.title}`;
       copy.reminds = [];
-      toast(`${r.owner_name || 'Друг'} отменил «${r.event.title}»`, { duration: 8000 });
+      toast(`${friendLabel(r.owner, r.owner_name)} отменил «${r.event.title}»`, { duration: 8000 });
       changed = true;
     } else if (copy && r.status === 'accepted' && !copy.invite?.cancelled && !sameSnapshot(inviteSnapshot(copy), { ...r.event, notes: copy.notes })) {
       Object.assign(copy, { title: r.event.title, date: r.event.date, endDate: r.event.endDate || null, start: r.event.start || null, end: r.event.end || null });
@@ -165,7 +165,7 @@ function resetInviteField() {
 /** После сохранения события: разослать новые приглашения, отменить снятые, обновить остальные. */
 async function saveEventInvites(ev) {
   if (!sync.client || !sync.user || $('#fInviteWrap').hidden || ev.repeat !== 'none') return;
-  const people = new Map(friendPeople().map((p) => [p.id, p.name]));
+  const people = new Map(friendPeople().map((p) => [p.id, p.origName || p.name]));
   const rows = invitesOf(ev.id);
   const event = inviteSnapshot(ev);
   const jobs = [];
@@ -222,7 +222,7 @@ function inviteEvents() {
 /** Строки в разделе «Друзья»: приглашения на события. */
 function inviteRows() {
   return openIncoming().map((r) => h('button', { class: 'invite-row event-invite', type: 'button', onclick: () => openInviteCard(r.id) },
-    h('span', {}, '📨 ', h('strong', {}, r.owner_name || 'Друг'), ` зовёт: ${r.event.title}`),
+    h('span', {}, '📨 ', h('strong', {}, friendLabel(r.owner, r.owner_name)), ` зовёт: ${r.event.title}`),
     h('small', {}, `${inviteWhenText(r.event)}${r.status === 'maybe' ? ' · вы ответили «может быть»' : ''}`)));
 }
 
@@ -236,7 +236,7 @@ function openInviteCard(id) {
   cardCal = findEvent(copyId(r.id))?.cal || defaultCal();
   $('#icTitle').textContent = r.event.title;
   $('#icWhen').textContent = inviteWhenText(r.event);
-  $('#icFrom').textContent = `${r.owner_name || 'Друг'} приглашает${r.status !== 'pending' ? ` · ваш ответ: ${{ accepted: 'приду', maybe: 'может быть', declined: 'не смогу', cancelled: 'приглашение отменено' }[r.status]}` : ''}`;
+  $('#icFrom').textContent = `${friendLabel(r.owner, r.owner_name)} приглашает${r.status !== 'pending' ? ` · ваш ответ: ${{ accepted: 'приду', maybe: 'может быть', declined: 'не смогу', cancelled: 'приглашение отменено' }[r.status]}` : ''}`;
   $('#icNotes').textContent = r.event.notes || '';
   $('#icNotes').hidden = !r.event.notes;
   renderCardCals();

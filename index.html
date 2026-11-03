@@ -89,7 +89,7 @@
         </details>
         <button class="link-btn" id="btnOnboarding" type="button">❓ Как пользоваться</button>
         <button class="link-btn" id="btnHelp" type="button">Горячие клавиши</button>
-        <button class="side-version" id="btnMemo" type="button">Версия 3.4.2</button>
+        <div class="side-version"><span class="side-version-text">Версия 3.4.2</span><button class="side-version-hit" id="btnMemo" type="button" aria-label="Версия"></button></div>
       </footer>
     </aside>
     <div class="backdrop" id="backdrop"></div>
@@ -322,10 +322,11 @@
   <dialog class="dialog memo-dialog" id="memoDialog">
     <div class="dialog-head">
       <h2>Заметки</h2>
-      <small class="muted" id="memoStatus"></small>
+      <button type="button" class="btn small" id="memoCopy">📋 Скопировать всё</button>
       <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
     </div>
     <textarea id="memoText" class="memo-text" spellcheck="false" aria-label="Заметки" placeholder="Пишите что угодно — сохраняется само"></textarea>
+    <small class="muted memo-status" id="memoStatus"></small>
   </dialog>
 
   <dialog class="dialog weather-dialog" id="weatherDialog">

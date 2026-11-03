@@ -265,7 +265,11 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .side-footer { margin-top: auto; display: flex; flex-direction: column; gap: 2px; border-top: 1px solid var(--line); padding-top: 10px; }
 .side-more summary { list-style: none; }
 /* Скрытые заметки: строка выглядит как номер версии */
-.side-version { align-self: flex-start; margin-top: 6px; padding: 4px 10px; border: 0; background: none; color: var(--muted); opacity: .45; font-size: 11px; }
+.side-version { position: relative; display: flex; align-items: stretch; margin-top: 6px; }
+.side-version-text { padding: 4px 10px; color: var(--muted); opacity: .45; font-size: 11px; cursor: default; user-select: none; }
+/* На компьютере нажимать нужно на пустое место правее надписи, на телефоне — на всю строку */
+.side-version-hit { flex: 1; min-height: 24px; padding: 0; border: 0; background: none; cursor: default; }
+.side-version-hit:focus-visible { outline: 1px dotted var(--line-strong); }
 .side-more summary::-webkit-details-marker { display: none; }
 .side-more[open] summary { color: var(--text); }
 .side-more .link-btn:not(summary) { padding-left: 20px; font-size: 13px; }
@@ -1142,6 +1146,7 @@ code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: va
 
 @media (max-width: 860px) {
   .app { grid-template-columns: 1fr; }
+  .side-version-hit { position: absolute; inset: 0; }
   .sidebar {
     position: fixed;
     inset: 0 auto 0 0;
@@ -1478,7 +1483,8 @@ a.btn.primary { color: var(--accent-text); }
 /* ---------- Заметки ---------- */
 .memo-dialog { width: min(720px, calc(100vw - 24px)); height: min(820px, calc(100dvh - 24px)); }
 .memo-dialog[open] { display: flex; flex-direction: column; gap: 10px; }
-.memo-dialog .dialog-head small { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.memo-status { margin-top: -4px; font-size: 12px; }
+.memo-dialog .dialog-head .btn { flex: none; white-space: nowrap; }
 .memo-text {
   flex: 1;
   width: 100%;
