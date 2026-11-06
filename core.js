@@ -143,6 +143,16 @@ const weekdayFromWord = (w) => stemIndex(WD_STEMS, w);
 /** Ближайший день недели wd (пн = 0), начиная с base включительно. */
 const nextWeekday = (base, wd) => addDays(base, (wd - wdIndex(base) + 7) % 7);
 
+/** Ближайшее n-е число, начиная с base: в этом месяце, если ещё не прошло, иначе в следующем, где такое число есть. */
+function nextDayOfMonth(base, n) {
+  if (!(n >= 1 && n <= 31)) return null;
+  for (let i = 0; i < 13; i++) {
+    const d = new Date(base.getFullYear(), base.getMonth() + i, n);
+    if (d.getDate() === n && d >= base) return d;
+  }
+  return null;
+}
+
 function applyPeriod(h, period) {
   if (!period) return h;
   const p = period.toLowerCase();
@@ -212,7 +222,7 @@ function spokenNumbers(text) {
     return `${h === 1 ? 12 : h - 1}:${pad(60 - n)}`;
   });
   // «двадцать пятого октября» → «25 октября»
-  s = s.replace(re(`${B}(${ORD})(?= ${MONTH}${E})`), (m, w) => {
+  s = s.replace(re(`${B}(${ORD})(?= (?:${MONTH}|числа|число)${E})`), (m, w) => {
     const d = ord(w);
     return d >= 1 && d <= 31 ? String(d) : m;
   });
@@ -447,7 +457,7 @@ function parseQuick(input, base = today()) {
       const hh = m[1] ?? m[3];
       const mm = m[2] ?? m[4];
       const rest = s.slice(m.index + m[0].length).trim().split(' ')[0];
-      if (!mm && monthFromWord(rest) >= 0) return false; // «в 15 октября» — это дата
+      if (!mm && (monthFromWord(rest) >= 0 || /^числ/i.test(rest))) return false; // «в 15 октября», «до 10 числа» — это дата
       const h = applyPeriod(+hh, m[5]); const min = +(mm || 0);
       if (!validTime(h, min)) return false;
       r.start = `${pad(h)}:${pad(min)}`;
@@ -470,10 +480,16 @@ function parseQuick(input, base = today()) {
     if (!d) return false;
     setDate(d);
   });
-  take('(\\d{1,2}) ([а-яё]+)(?: (\\d{4}))?', (m) => {
+  take('(\\d{1,2})(?:-?(?:го|е|ое))? ([а-яё]+)(?: (\\d{4}))?', (m) => {
     const mo = monthFromWord(m[2]);
     if (mo < 0) return false;
     const d = makeDate(+m[1], mo, m[3] ? +m[3] : null);
+    if (!d) return false;
+    setDate(d);
+  });
+  // «10 числа», «3-го», «до 15го числа» — день текущего месяца, а если он уже прошёл — следующего
+  take('(?:(?:до|к|на) )?(\\d{1,2})(?:-?(?:го|е|ое|му))? (?:числа|число|числу)|(?:(?:до|к|на) )?(\\d{1,2})-?(?:го|му)', (m) => {
+    const d = nextDayOfMonth(base, +(m[1] || m[2]));
     if (!d) return false;
     setDate(d);
   });
@@ -511,6 +527,7 @@ function parseQuick(input, base = today()) {
     // Остатки от вырезанных частей: «созвон , , .» → «созвон»
     .replace(/\s+([,.;])/g, '$1')
     .replace(/([,;])(?:\s*[,;.])+/g, '$1')
+    .replace(/^(?:будет|будут)\s+(?=\S)/i, '') // «10 числа будет встреча» → «Встреча»
     .replace(/^(?:в|во|на|к|до|с|со|по)\s+/i, '')
     .replace(/[\s,]+(?:в|во|на|к|до|с|со|по)$/i, '')
     .replace(/^[,.\s-]+|[,;.\s-]+$/g, '');
