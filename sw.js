@@ -1,5 +1,5 @@
 // Офлайн-режим: файлы приложения хранятся в кэше на случай, если сети нет.
-const CACHE = 'everyday-calendar-v21';
+const CACHE = 'everyday-calendar-v22';
 const ASSETS = [
   './', 'index.html', 'style.css', 'config.js', 'core.js', 'alarms.js', 'weather.js', 'insights.js', 'sharing.js', 'sync.js', 'tasks.js', 'remind-editor.js', 'reminders-ui.js', 'overlays.js', 'insights-ui.js', 'friends.js', 'invites.js', 'notify-settings.js', 'onboarding.js', 'share-image.js', 'weather-ui.js', 'voice.js', 'memo.js', 'app.js',
   'vendor/supabase-2.117.2.js', 'manifest.webmanifest', 'icon.svg',
@@ -86,7 +86,7 @@ self.addEventListener('notificationclick', (e) => {
       await self.clients.openWindow(`./?invite=${d.id}`);
       return;
     }
-    // Вечерний вопрос «Как было по одежде?» и совет на завтра — открыть окно погоды
+    // Вечернее предупреждение «завтра похолодает» — открыть окно погоды
     if (d.kind === 'weather') {
       if (list[0]) {
         await list[0].focus();

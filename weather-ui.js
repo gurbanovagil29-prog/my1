@@ -2,29 +2,26 @@
 
 /*
  * Погода в календаре: значок и температура в месяце и неделе (ячейка подкрашена по температуре),
- * окно «🌦 Погода» с советом «что надеть», карточка в «Списке»,
- * вопрос «Как было по одежде?» и точность прогноза. Сами советы считает weather.js.
+ * окно «🌦 Погода» (прогноз по дням, утро/день/вечер, погода к делам, точность прогноза) и карточка в «Списке».
+ * Прогноз и его разбор — weather.js.
  *
- * Место, «мёрзну / как все / жарко», ответы и время вечернего совета хранятся в настройках календаря,
- * а после входа — ещё и в аккаунте (user_prefs): их читает серверная функция remind, которая
- * вечером спрашивает «как было» и предупреждает, если завтра погода заметно другая.
+ * Место и время вечернего предупреждения хранятся в настройках календаря, а после входа — ещё и в аккаунте
+ * (user_prefs): их читает серверная функция remind, которая вечером предупреждает, если завтра погода заметно другая.
  */
 
 /* global state, sync, notify, h, $, toast, closeNav, userTz, saveSettings, render, toKey, fromKey, addDays, today,
    collect, visibleEvents, isDailySpan, plansByDay, capitalize, relativeDay, formatDate, WD_SHORT, readJSON, loadNotifyState,
    weatherUrl, weatherAccuracyUrl, parseForecast, compactForecast, geoDistance, tempColor, dayIcon, wxLabel, fmtTemp, fmtRange,
-   clothingAdvice, wxOffset, applyWeatherFeedback, feedbackStats, forecastAccuracy, WX_ANSWER_TEXT */
+   dayWeather, forecastAccuracy */
 
 const WX_CACHE_KEY = 'everyday-calendar:weather';
 const WX_ACC_KEY = 'everyday-calendar:weather-accuracy';
 const WX_TTL = 60 * 60000;
-const WX_DEFAULTS = { on: false, since: null, lat: null, lon: null, place: '', auto: true, feel: 'normal', adjust: 0, eve: '21:00', log: [], month: true };
-const WX_FEEL_LABELS = [['cold', '🥶 Я мёрзну'], ['normal', '👌 Как все'], ['hot', '🥵 Мне обычно жарко']];
+const WX_DEFAULTS = { on: false, lat: null, lon: null, place: '', auto: true, eve: '21:00', month: true };
 
-const wx = { fc: null, fcFor: null, loading: null, day: null, acc: undefined, found: null, missing: false, uploaded: 0, checked: 0, editFeedback: false };
+const wx = { fc: null, fcFor: null, loading: null, day: null, acc: undefined, found: null, missing: false, uploaded: 0, checked: 0 };
 
 const wxSettings = () => ({ ...WX_DEFAULTS, ...(state.settings.weather || {}) });
-const wxPrefsOf = (s) => ({ wx_feel: s.feel, wx_adjust: s.adjust, wx_log: s.log });
 const wxOn = () => { const s = wxSettings(); return s.on && s.lat != null; };
 const round2 = (x) => Math.round(x * 100) / 100;
 /** «−2°» без плюса — для тесных мест (месяц, неделя). */
@@ -39,21 +36,18 @@ function wxStore(key, value) {
 const wxServerReady = () => Boolean(sync.client && sync.user && notify.prefs && !notify.missing && !wx.missing);
 
 async function saveWx(patch, { server = true } = {}) {
-  const prev = wxSettings();
-  state.settings.weather = { ...prev, ...patch };
-  // С какого дня погода включена — раньше не спрашиваем «как было по одежде»
-  if (patch.on && !prev.on) state.settings.weather.since = toKey(today());
+  state.settings.weather = { ...wxSettings(), ...patch };
   saveSettings();
   if (!server || !wxServerReady()) return;
   const s = wxSettings();
   const { data, error } = await sync.client.from('user_prefs').upsert({
     user_id: sync.user.id, tz: userTz(),
     wx_lat: s.on ? s.lat : null, wx_lon: s.on ? s.lon : null, wx_place: s.place || null,
-    wx_feel: s.feel, wx_adjust: s.adjust, wx_eve: s.eve || null, wx_log: s.log,
+    wx_eve: s.eve || null,
     updated_at: new Date().toISOString(),
   }, { onConflict: 'user_id' }).select();
   if (error) {
-    // Колонок погоды ещё нет (не выполнен update-3.sql) — работаем без вечернего совета
+    // Колонок погоды ещё нет (не выполнен update-3.sql) — работаем без вечернего предупреждения
     if (/wx_|column/i.test(error.message)) wx.missing = true;
     else toast(`Погода: не получилось сохранить в аккаунт — ${error.message}`);
     return;
@@ -61,7 +55,7 @@ async function saveWx(patch, { server = true } = {}) {
   notify.prefs = data?.[0] || notify.prefs;
 }
 
-/** Настройки из аккаунта (после входа и при открытии окна): ответы из Telegram, другое устройство. */
+/** Настройки из аккаунта (после входа и при открытии окна): место и время с другого устройства. */
 function onWeatherPrefs(p) {
   if (!p) return;
   if (!('wx_lat' in p)) { wx.missing = true; return; }
@@ -70,8 +64,7 @@ function onWeatherPrefs(p) {
   if (p.wx_lat != null) {
     const moved = s.lat == null || geoDistance({ lat: p.wx_lat, lon: p.wx_lon }, s) > 1;
     state.settings.weather = {
-      ...s, on: true, since: s.since || toKey(today()), lat: p.wx_lat, lon: p.wx_lon, place: p.wx_place || s.place,
-      feel: p.wx_feel || 'normal', adjust: +p.wx_adjust || 0, eve: p.wx_eve ?? null, log: Array.isArray(p.wx_log) ? p.wx_log : [],
+      ...s, on: true, lat: p.wx_lat, lon: p.wx_lon, place: p.wx_place || s.place, eve: p.wx_eve ?? null,
     };
     saveSettings();
     if (moved) { wx.fc = null; refreshForecast(true); }
@@ -202,9 +195,9 @@ async function recheckLocation() {
   toast(`🌦 Погода теперь для: ${place || 'нового места'}`);
 }
 
-/* ---------- Совет на день ---------- */
+/* ---------- Погода на день ---------- */
 
-/** Дела дня со временем — по ним видно, когда вы на улице. */
+/** Дела дня со временем — к каждому показываем погоду в это время. */
 function wxDayItems(key) {
   const d = fromKey(key);
   const events = (collect(visibleEvents(false), d, d).get(key) || [])
@@ -214,10 +207,10 @@ function wxDayItems(key) {
   return [...events, ...plans];
 }
 
-function wxAdvice(key) {
+function wxDay(key) {
   if (!wxOn() || !wx.fc) return null;
   const isToday = key === toKey(today());
-  return clothingAdvice(wx.fc, key, { offset: wxOffset(wxPrefsOf(wxSettings())), events: wxDayItems(key), nowHour: isToday ? new Date().getHours() : null });
+  return dayWeather(wx.fc, key, { events: wxDayItems(key), nowHour: isToday ? new Date().getHours() : null });
 }
 
 /** Погода дня для месяца и недели: { icon, tmax, tmin, color, text } или null. */
@@ -240,70 +233,28 @@ function weekWxBadge(key) {
   return w ? h('span', { class: 'tg-wx', title: w.text }, `${w.icon} ${deg(w.tmax)}/${deg(w.tmin)}`) : null;
 }
 
-/** Какой день спросить «Как было по одежде?»: сегодня после 14:00, утром — вчера, если не ответили. */
-function feedbackDay() {
-  const s = wxSettings();
-  const t = toKey(today());
-  if (new Date().getHours() >= 14) return t;
-  const y = toKey(addDays(today(), -1));
-  return s.log.some((x) => x.d === y) || !s.since || y < s.since ? null : y;
-}
-
-function feedbackBlock(key, compact = false) {
-  const s = wxSettings();
-  const answer = s.log.find((x) => x.d === key)?.a;
-  const word = key === toKey(today()) ? 'сегодня' : 'вчера';
-  if (answer && !wx.editFeedback) {
-    return compact ? null : h('div', { class: 'wx-feedback is-done' },
-      h('span', {}, `Как было ${word}: ${WX_ANSWER_TEXT[answer]}`),
-      h('button', { class: 'link-btn inline', type: 'button', onclick: () => { wx.editFeedback = true; renderWeather(); } }, 'изменить'));
-  }
-  const btn = (a, label, short) => h('button', {
-    class: `btn small${answer === a ? ' is-active' : ''}`, type: 'button', title: label, onclick: () => answerWx(key, a),
-  }, compact ? short : label);
-  return h('div', { class: `wx-feedback${compact ? ' is-compact' : ''}` },
-    h('strong', {}, `👕 Как было по одежде ${word}?`),
-    h('div', { class: 'wx-feedback-btns' },
-      btn('cold', '🥶 Холодно', '🥶 Холодно'), btn('ok', '👌 В самый раз', '👌 Норм'), btn('hot', '🥵 Жарко', '🥵 Жарко'), btn('in', '🏠 Не был(а) на улице', '🏠 Не выходил(а)')));
-}
-
-async function answerWx(key, a) {
-  const s = wxSettings();
-  const patch = applyWeatherFeedback(wxPrefsOf(s), key, a);
-  if (!patch) return;
-  wx.editFeedback = false;
-  await saveWx({ log: patch.wx_log, adjust: patch.wx_adjust });
-  const tip = patch.wx_adjust < s.adjust ? ' Буду советовать потеплее.' : patch.wx_adjust > s.adjust ? ' Буду советовать полегче.' : '';
-  toast(`Записал: ${WX_ANSWER_TEXT[a]}.${tip}`);
-  render();
-  if ($('#weatherDialog').open) renderWeather();
-}
-
-/** Карточка вверху «Списка»: что надеть сегодня (вечером — завтра), а без погоды — предложение включить. */
+/** Карточка вверху «Списка»: погода на сегодня (вечером — на завтра), а без погоды — предложение включить. */
 function agendaWeatherCard() {
   const s = wxSettings();
   if (!wxOn()) {
     if (state.settings.wxPromoHidden) return null;
     return h('div', { class: 'wx-card is-promo' },
-      h('span', {}, '🌦 Погода и совет, что надеть, — прямо в календаре'),
+      h('span', {}, '🌦 Погода прямо в календаре — в месяце, неделе и к каждому делу'),
       h('button', { class: 'btn small primary', type: 'button', onclick: () => openWeather() }, 'Включить'),
       h('button', { class: 'icon-btn small', type: 'button', 'aria-label': 'Скрыть', onclick: () => { state.settings.wxPromoHidden = true; saveSettings(); render(); } }, '✕'));
   }
   const evening = new Date().getHours() >= 20;
   const key = toKey(evening ? addDays(today(), 1) : today());
-  const a = wxAdvice(key);
+  const a = wxDay(key);
   if (!a) return wx.loading ? h('div', { class: 'wx-card muted' }, '🌦 Загружаю прогноз…') : null;
-  const fb = feedbackDay();
   return h('div', { class: 'wx-card' },
     h('button', { class: 'wx-card-main', type: 'button', onclick: () => openWeather(key) },
       h('span', { class: 'wx-card-icon' }, a.icon),
       h('span', { class: 'wx-card-text' },
         h('strong', {}, `${evening ? 'Завтра' : 'Сегодня'}${s.place ? ` · ${s.place}` : ''}: ${a.summary}`),
-        a.notes.length ? h('small', {}, a.notes.join(' · ')) : null,
-        h('span', {}, `👕 ${a.short}`)),
+        a.notes.length ? h('small', {}, a.notes.join(' · ')) : null),
       h('span', { class: 'wx-card-more' }, 'Подробнее ›')),
-    a.alerts.length ? h('div', { class: 'wx-alert' }, a.alerts[0]) : null,
-    fb ? feedbackBlock(fb, true) : null);
+    a.alerts.length ? h('div', { class: 'wx-alert' }, a.alerts[0]) : null);
 }
 
 /* ---------- Окно «🌦 Погода» ---------- */
@@ -311,7 +262,6 @@ function agendaWeatherCard() {
 function openWeather(key = null) {
   closeNav();
   wx.day = key || toKey(today());
-  wx.editFeedback = false;
   renderWeather();
   $('#weatherDialog').showModal();
   refreshForecast();
@@ -334,7 +284,7 @@ function placeSection() {
       : h('p', { class: 'muted small' }, 'Ничего не нашёл — попробуйте иначе')) : null);
 }
 
-function adviceSection(a) {
+function daySection(a) {
   return h('section', { class: 'wx-advice' },
     h('div', { class: 'wx-summary' },
       h('span', { class: 'wx-big' }, a.icon),
@@ -342,26 +292,15 @@ function adviceSection(a) {
     a.phases.length > 1 ? h('div', { class: 'wx-phases' }, a.phases.map((p) => h('div', { class: 'wx-phase', style: { '--wx': tempColor(p.temp) } },
       h('small', {}, p.label), h('b', {}, `${fmtTemp(p.temp)}${p.icon ? ` ${p.icon}` : ''}`), h('span', {}, p.word)))) : null,
     a.alerts.length ? h('div', { class: 'wx-alerts' }, a.alerts.map((x) => h('div', { class: 'wx-alert' }, x))) : null,
-    h('div', { class: 'wx-layers' }, a.layers.map((l) => h('div', { class: 'wx-layer' },
-      h('span', { class: 'wx-layer-icon' }, l.icon), h('small', {}, l.label), h('span', {}, l.text)))),
-    a.carry.length ? h('div', { class: 'wx-carry' }, h('small', { class: 'muted' }, 'С собой'), a.carry.map((c) => h('div', {}, c))) : null,
     a.events.length ? h('div', { class: 'wx-events' }, h('small', { class: 'muted' }, 'К делам дня'),
-      a.events.map((e) => h('div', { class: e.note ? 'is-note' : '' }, `${e.time} ${e.title} — ${e.icon} ${fmtTemp(e.temp)}${e.note ? `, ${e.note}` : ''}`))) : null,
-    h('p', { class: 'muted small' }, `Совет на время ${a.from}:00–${a.to}:00${a.from > 8 || a.to < 21 ? ' — по вашим делам' : ''}, по ощущаемой температуре${a.offset ? `, с поправкой ${a.offset > 0 ? '+' : '−'}${Math.abs(a.offset)}° под вас` : ''}.`));
+      a.events.map((e) => h('div', { class: e.note ? 'is-note' : '' }, `${e.time} ${e.title} — ${e.icon} ${fmtTemp(e.temp)}${e.note ? `, ${e.note}` : ''}`))) : null);
 }
 
 function accuracySection() {
-  const s = wxSettings();
-  const st = feedbackStats(s.log, toKey(today()), 30);
   if (wx.acc === undefined) loadAccuracy();
   const acc = wx.acc;
   return h('section', { class: 'notify-sec' },
-    h('h3', {}, '🎯 Насколько точно'),
-    h('p', {}, st.total || st.in
-      ? `Ваши ответы за 30 дней: 👌 ${st.ok} · 🥶 ${st.cold} · 🥵 ${st.hot}${st.in ? ` · 🏠 ${st.in}` : ''}${st.total ? ` — в самый раз ${Math.round((st.ok / st.total) * 100)}%` : ''}.`
-      : 'Отвечайте вечером «Как было по одежде?» — здесь будет видно, как часто совет попадает.'),
-    s.adjust ? h('p', { class: 'muted small' }, `По вашим ответам советую на ${Math.abs(s.adjust)}° ${s.adjust < 0 ? 'теплее' : 'легче'}. `,
-      h('button', { class: 'link-btn inline', type: 'button', onclick: async () => { await saveWx({ adjust: 0 }); renderWeather(); render(); } }, 'Сбросить')) : null,
+    h('h3', {}, '🎯 Насколько точен прогноз'),
     h('p', { class: 'muted small' }, acc
       ? `Прогноз «на завтра» за ${acc.days} дн.: ошибался в среднем на ${String(acc.tempErr).replace('.', ',')}°, дождь угадал в ${acc.rainHit}% дней.`
       : acc === null ? 'Точность прогноза пока не посчитать — нет данных или сети.' : 'Считаю точность прогноза…'));
@@ -394,19 +333,14 @@ function settingsSection() {
       h('h3', {}, `📍 ${s.place || 'Моё место'}`),
       placeSection()),
     h('section', { class: 'notify-sec' },
-      h('h3', {}, 'Под себя'),
-      WX_FEEL_LABELS.map(([v, label]) => h('label', { class: 'check' },
-        h('input', { type: 'radio', name: 'wxFeel', value: v, checked: s.feel === v, onchange: async () => { await saveWx({ feel: v }); renderWeather(); render(); } }), label)),
-      h('p', { class: 'muted small' }, '«Мёрзну» — советы на 3° теплее, «жарко» — на 3° легче. Ответы «Как было по одежде?» подправляют ещё.')),
-    h('section', { class: 'notify-sec' },
       h('h3', {}, '🌙 Вечером'),
       h('div', { class: 'notify-row' },
         h('label', { class: 'check' }, h('input', {
           type: 'checkbox', checked: Boolean(s.eve),
           onchange: async (e) => { await saveWx({ eve: e.target.checked ? eveTime.value || '21:00' : null }); renderWeather(); },
-        }), 'Спрашивать «как было» в'),
+        }), 'Предупреждать в'),
         eveTime),
-      h('p', { class: 'muted small' }, `Каждый вечер — вопрос, а если завтра заметно другая погода (на 5° холоднее или теплее, дождь, снег, сильный ветер) — ещё и совет на завтра. ${serverNote}`)),
+      h('p', { class: 'muted small' }, `Если завтра погода заметно другая — на 5° холоднее или теплее, дождь, снег, гроза, сильный ветер, — вечером придёт предупреждение. ${serverNote}`)),
     h('section', { class: 'notify-sec' },
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: s.month, onchange: (e) => { saveWx({ month: e.target.checked }, { server: false }); render(); } }), 'Погода в месяце: значок и цвет дня'),
       h('button', { class: 'btn small', type: 'button', onclick: async () => { await saveWx({ on: false }); wx.fc = null; renderWeather(); render(); } }, 'Выключить погоду')));
@@ -418,7 +352,7 @@ function renderWeather() {
   const s = wxSettings();
   if (!wxOn()) {
     body.replaceChildren(
-      h('p', {}, 'Покажу погоду в календаре и подскажу, что надеть: по слоям, с зонтом, если будет дождь, и с учётом ваших дел — во сколько вы на улице.'),
+      h('p', {}, 'Покажу погоду прямо в календаре: значок и температуру в месяце и неделе, прогноз по часам и погоду к каждому вашему делу.'),
       h('p', { class: 'muted small' }, 'Прогноз — Open-Meteo, бесплатно и без регистрации. Место нужно, чтобы взять прогноз для него.'),
       placeSection());
     return;
@@ -435,13 +369,11 @@ function renderWeather() {
       onclick: () => { wx.day = key; renderWeather(); },
     }, h('small', {}, label), h('span', {}, d ? dayIcon(d) : '·'), h('b', {}, d ? deg(d.tmax) : ''));
   }));
-  const a = wxAdvice(wx.day);
-  const fb = feedbackDay();
+  const a = wxDay(wx.day);
   body.replaceChildren(...[
     h('p', { class: 'wx-where muted small' }, `📍 ${s.place || 'Моё место'} · `, h('span', {}, wx.fc ? `обновлено в ${new Date(wx.fc.at).toTimeString().slice(0, 5)}` : 'загружаю…')),
     tabs,
-    a ? adviceSection(a) : h('div', { class: 'side-empty' }, wx.loading || !wx.fc ? 'Загружаю прогноз…' : 'На этот день прогноза нет'),
-    fb ? feedbackBlock(fb) : null,
+    a ? daySection(a) : h('div', { class: 'side-empty' }, wx.loading || !wx.fc ? 'Загружаю прогноз…' : 'На этот день прогноза нет'),
     accuracySection(),
     settingsSection(),
   ].filter(Boolean));
@@ -458,7 +390,7 @@ function initWeather() {
     recheckLocation();
   });
   setInterval(() => refreshForecast(), WX_TTL);
-  // Нажали на вечернее уведомление «Как было по одежде?»
+  // Нажали на вечернее предупреждение о погоде
   navigator.serviceWorker?.addEventListener('message', (e) => {
     if (e.data?.type === 'weather-open') openWeather();
   });

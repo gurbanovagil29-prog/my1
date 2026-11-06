@@ -133,9 +133,6 @@ const db = {
       { method: 'PATCH', body: { wx_sent: key }, prefer: 'return=representation' });
     return rows.length > 0;
   },
-  async updatePrefs(userId, patch) {
-    await rest(`user_prefs?user_id=eq.${q(userId)}`, { method: 'PATCH', body: { ...patch, updated_at: new Date().toISOString() } });
-  },
   async claimDigest(userId, key) {
     const rows = await rest(`user_prefs?user_id=eq.${q(userId)}&or=(digest_sent.is.null,digest_sent.lt.${q(key)})`,
       { method: 'PATCH', body: { digest_sent: key }, prefer: 'return=representation' });
