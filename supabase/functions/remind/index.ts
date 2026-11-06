@@ -125,6 +125,16 @@ const weekdayFromWord = (w) => stemIndex(WD_STEMS, w);
 /** Ближайший день недели wd (пн = 0), начиная с base включительно. */
 const nextWeekday = (base, wd) => addDays(base, (wd - wdIndex(base) + 7) % 7);
 
+/** Ближайшее n-е число, начиная с base: в этом месяце, если ещё не прошло, иначе в следующем, где такое число есть. */
+function nextDayOfMonth(base, n) {
+  if (!(n >= 1 && n <= 31)) return null;
+  for (let i = 0; i < 13; i++) {
+    const d = new Date(base.getFullYear(), base.getMonth() + i, n);
+    if (d.getDate() === n && d >= base) return d;
+  }
+  return null;
+}
+
 function applyPeriod(h, period) {
   if (!period) return h;
   const p = period.toLowerCase();
@@ -190,7 +200,7 @@ function spokenNumbers(text) {
     return `${h === 1 ? 12 : h - 1}:${pad(60 - n)}`;
   });
   // «двадцать пятого октября» → «25 октября»
-  s = s.replace(re(`${B}(${ORD})(?= ${MONTH}${E})`), (m, w) => {
+  s = s.replace(re(`${B}(${ORD})(?= (?:${MONTH}|числа|число)${E})`), (m, w) => {
     const d = ord(w);
     return d >= 1 && d <= 31 ? String(d) : m;
   });
@@ -425,7 +435,7 @@ function parseQuick(input, base = today()) {
       const hh = m[1] ?? m[3];
       const mm = m[2] ?? m[4];
       const rest = s.slice(m.index + m[0].length).trim().split(' ')[0];
-      if (!mm && monthFromWord(rest) >= 0) return false; // «в 15 октября» — это дата
+      if (!mm && (monthFromWord(rest) >= 0 || /^числ/i.test(rest))) return false; // «в 15 октября», «до 10 числа» — это дата
       const h = applyPeriod(+hh, m[5]); const min = +(mm || 0);
       if (!validTime(h, min)) return false;
       r.start = `${pad(h)}:${pad(min)}`;
@@ -448,10 +458,16 @@ function parseQuick(input, base = today()) {
     if (!d) return false;
     setDate(d);
   });
-  take('(\\d{1,2}) ([а-яё]+)(?: (\\d{4}))?', (m) => {
+  take('(\\d{1,2})(?:-?(?:го|е|ое))? ([а-яё]+)(?: (\\d{4}))?', (m) => {
     const mo = monthFromWord(m[2]);
     if (mo < 0) return false;
     const d = makeDate(+m[1], mo, m[3] ? +m[3] : null);
+    if (!d) return false;
+    setDate(d);
+  });
+  // «10 числа», «3-го», «до 15го числа» — день текущего месяца, а если он уже прошёл — следующего
+  take('(?:(?:до|к|на) )?(\\d{1,2})(?:-?(?:го|е|ое|му))? (?:числа|число|числу)|(?:(?:до|к|на) )?(\\d{1,2})-?(?:го|му)', (m) => {
+    const d = nextDayOfMonth(base, +(m[1] || m[2]));
     if (!d) return false;
     setDate(d);
   });
@@ -489,6 +505,7 @@ function parseQuick(input, base = today()) {
     // Остатки от вырезанных частей: «созвон , , .» → «созвон»
     .replace(/\s+([,.;])/g, '$1')
     .replace(/([,;])(?:\s*[,;.])+/g, '$1')
+    .replace(/^(?:будет|будут)\s+(?=\S)/i, '') // «10 числа будет встреча» → «Встреча»
     .replace(/^(?:в|во|на|к|до|с|со|по)\s+/i, '')
     .replace(/[\s,]+(?:в|во|на|к|до|с|со|по)$/i, '')
     .replace(/^[,.\s-]+|[,;.\s-]+$/g, '');
@@ -1002,8 +1019,8 @@ if (typeof module !== 'undefined') {
 // ===== weather.js =====
 
 /*
- * Погода и «что надеть». Без DOM: тот же код работает в календаре, в серверной функции remind
- * (вечерний совет «на завтра», строка в утренней сводке, ответы боту) и в тестах.
+ * Погода. Без DOM: тот же код работает в календаре, в серверной функции remind
+ * (вечернее предупреждение «завтра похолодает», строка в утренней сводке, /weather у бота) и в тестах.
  *
  * Прогноз — Open-Meteo (бесплатно, без ключа): по часам на 16 дней. Внутри календаря он хранится так:
  * { tz, at, days: { 'YYYY-MM-DD': день }, hours: { 'YYYY-MM-DD': [час × 24] } }
@@ -1011,19 +1028,12 @@ if (typeof module !== 'undefined') {
  *   час:  { h, t, f, pop, pr, snow, code, wind, gust, uv, day }
  * t — температура, f — ощущается как, pop — вероятность осадков (%), pr — осадки (мм), snow — снег (см),
  * wind/gust — ветер и порывы (м/с), uv — УФ-индекс, day — светло ли.
- *
- * Совет по одежде строится по ощущаемой температуре со сдвигом «под себя»: offset = «я обычно мёрзну / как все / мне жарко»
- * (−3 / 0 / +3) плюс поправка по вечерним ответам «Как было по одежде?» (холодно −1, жарко +1, не больше ±6).
  */
 
 const WX_API = 'https://api.open-meteo.com/v1/forecast';
 const WX_PREV_API = 'https://previous-runs-api.open-meteo.com/v1/forecast';
 const WX_HOURLY = ['temperature_2m', 'apparent_temperature', 'precipitation_probability', 'precipitation', 'snowfall', 'weather_code', 'wind_speed_10m', 'wind_gusts_10m', 'uv_index', 'is_day'];
 const WX_DAILY = ['weather_code', 'temperature_2m_max', 'temperature_2m_min', 'apparent_temperature_max', 'apparent_temperature_min', 'precipitation_sum', 'precipitation_probability_max', 'snowfall_sum', 'wind_gusts_10m_max', 'uv_index_max'];
-const WX_ADJUST_MAX = 6;
-const WX_FEEL = { cold: -3, normal: 0, hot: 3 };
-const WX_ANSWERS = { cold: -1, ok: 0, hot: 1, in: 0 };
-const WX_ANSWER_TEXT = { cold: '🥶 холодно', ok: '👌 в самый раз', hot: '🥵 жарко', in: '🏠 не был(а) на улице' };
 
 // Коды погоды WMO: [вид, описание, значок днём, значок ночью]
 const WX_CODES = {
@@ -1145,11 +1155,11 @@ function dayIcon(day) {
   return wxIcon(day.code);
 }
 
-/* ---------- Совет «что надеть» ---------- */
+/* ---------- Погода на день ---------- */
 
 const WX_PHASES = [['Утро', 6, 11], ['День', 12, 16], ['Вечер', 17, 22]];
 
-/** Как ощущается: слово для температуры (уже со сдвигом «под себя»). */
+/** Как ощущается: слово для температуры. */
 function feelWord(e) {
   if (e >= 28) return 'жарко';
   if (e >= 21) return 'тепло';
@@ -1160,21 +1170,7 @@ function feelWord(e) {
   return 'сильный мороз';
 }
 
-/**
- * Когда вы на улице: от часа до первого дела дня до часа после последнего (не меньше трёх часов),
- * без дел — с 8 до 21. events — [{ start: 'HH:MM', end: 'HH:MM' }].
- */
-function outdoorWindow(events = []) {
-  const toM = (s) => { const [h, m] = String(s).split(':').map(Number); return h * 60 + (m || 0); };
-  const timed = events.filter((e) => e.start);
-  if (!timed.length) return [8, 21];
-  const first = Math.min(...timed.map((e) => toM(e.start)));
-  const last = Math.max(...timed.map((e) => (e.end && toM(e.end) > toM(e.start) ? toM(e.end) : toM(e.start) + 60)));
-  const from = Math.min(21, Math.max(6, Math.floor(first / 60) - 1));
-  return [from, Math.min(24, Math.max(from + 3, Math.ceil(last / 60) + 1))];
-}
-
-/** Часы подряд, когда выполняется условие: «14–17», «весь день». */
+/** Часы подряд, когда выполняется условие: «14–17», «в 9». */
 function hourRanges(hours, test) {
   const out = [];
   for (const x of hours) {
@@ -1191,154 +1187,73 @@ const isRainHour = (x) => wxKind(x.code) !== 'snow' && x.snow < 0.1 && (x.pr >= 
 const isSnowHour = (x) => x.snow >= 0.1 || (wxKind(x.code) === 'snow' && x.pop >= 30);
 
 /**
- * Совет на день key. opts: { offset — сдвиг «под себя» (°), events — дела дня [{ title, start, end }],
- * now — для сегодняшнего дня берём только оставшиеся часы, nowHour — текущий час (по часам пользователя) }.
+ * Погода на день key: температура, осадки по часам, утро/день/вечер, предупреждения и погода к делам дня.
+ * opts: { events — дела дня [{ title, start }], nowHour — для сегодняшнего дня берём только оставшиеся часы }.
  * Возвращает null, если прогноза на этот день нет.
  */
-function clothingAdvice(fc, key, { offset = 0, events = [], nowHour = null } = {}) {
+function dayWeather(fc, key, { events = [], nowHour = null } = {}) {
   const day = fc?.days?.[key];
   if (!day) return null;
   const all = fc.hours?.[key] || [];
-  let [from, to] = outdoorWindow(events);
-  if (nowHour != null) {
-    // Сегодня: утро уже прошло — советуем на оставшуюся часть дня
-    if (nowHour >= to - 1) [from, to] = [nowHour, Math.min(24, nowHour + 3)];
-    else from = Math.max(from, nowHour);
-  }
-  let hs = all.filter((x) => x.h >= from && x.h < to);
-  if (!hs.length) hs = all;
-  // Нет почасового прогноза (дальние дни) — считаем по дневным цифрам
-  const fmin = hs.length ? Math.min(...hs.map((x) => x.f)) : day.fmin;
-  const fmax = hs.length ? Math.max(...hs.map((x) => x.f)) : day.fmax;
-  const tmin = hs.length ? Math.min(...hs.map((x) => x.t)) : day.tmin;
-  const tmax = hs.length ? Math.max(...hs.map((x) => x.t)) : day.tmax;
-  const emin = fmin + offset;
-  const emax = fmax + offset;
+  const from = nowHour == null ? 6 : Math.min(nowHour, 23);
+  const hs = all.filter((x) => x.h >= from);
   const gust = hs.length ? Math.max(...hs.map((x) => x.gust)) : day.gust;
   const wind = hs.length ? Math.max(...hs.map((x) => x.wind)) : day.gust * 0.6;
   const uv = hs.length ? Math.max(...hs.map((x) => x.uv)) : day.uv;
-  const rain = hs.length ? hourRanges(hs, isRainHour) : (day.pr >= 1 && day.pop >= 50 ? [[from, to]] : []);
-  const snow = hs.length ? hourRanges(hs, isSnowHour) : (day.snow >= 0.5 ? [[from, to]] : []);
+  const rain = hs.length ? hourRanges(hs, isRainHour) : (day.pr >= 1 && day.pop >= 50 ? [[from, 24]] : []);
+  const snow = hs.length ? hourRanges(hs, isSnowHour) : (day.snow >= 0.5 ? [[from, 24]] : []);
   const storm = hourRanges(hs, (x) => wxKind(x.code) === 'storm');
   const maybeRain = !rain.length && (hs.length ? hs.some((x) => x.pop >= 30 && x.snow < 0.1) : day.pop >= 40);
-  const wet = rain.length > 0 || snow.length > 0;
   const rainPop = Math.max(0, ...hs.filter(isRainHour).map((x) => x.pop));
   // Гололёд: около нуля после осадков или ледяной дождь
-  const ice = hs.some((x) => wxKind(x.code) === 'ice') || (tmin <= 0.5 && tmax >= -3 && (day.pr >= 0.5 || wet) && day.tmin < 0.5);
+  const ice = hs.some((x) => wxKind(x.code) === 'ice') || (day.tmin <= 0.5 && day.tmax >= -3 && (day.pr >= 0.5 || rain.length > 0 || snow.length > 0));
   const windy = gust >= 12 || wind >= 8;
 
   const phases = WX_PHASES.map(([label, a, b]) => {
-    const xs = all.filter((x) => x.h >= a && x.h <= b && x.h >= from - 1 && x.h <= to);
+    const xs = all.filter((x) => x.h >= a && x.h <= b && x.h >= from - 1);
     if (!xs.length) return null;
-    const f = xs.reduce((s, x) => s + x.f, 0) / xs.length;
+    const f = xs.reduce((sum, x) => sum + x.f, 0) / xs.length;
     const r = xs.some(isRainHour) ? '🌧' : xs.some(isSnowHour) ? '🌨' : '';
-    return { label, temp: f, word: feelWord(f + offset), icon: r };
+    return { label, temp: f, word: feelWord(f), icon: r };
   }).filter(Boolean);
 
-  const layers = [];
-  const add = (icon, label, text) => layers.push({ icon, label, text });
-  // Верх — по самому тёплому времени, утеплитель и куртка — по самому холодному
-  if (emax >= 24) add('👕', 'Верх', 'футболка или майка из лёгкой ткани');
-  else if (emax >= 17) add('👕', 'Верх', 'футболка');
-  else if (emax >= 8) add('👕', 'Верх', 'лонгслив или футболка');
-  else if (emin >= -5) add('👕', 'Верх', 'лонгслив или водолазка');
-  else add('👕', 'Верх', 'термобельё и водолазка');
-
-  const swing = emax - emin >= 7;
-  if (emin >= 18) { /* утеплитель не нужен */ } else if (emin >= 13) add('🧶', 'Утеплитель', swing ? 'лёгкая кофта или рубашка — на утро и вечер' : 'лёгкая кофта или рубашка');
-  else if (emin >= 7) add('🧶', 'Утеплитель', `худи или лёгкий свитер${swing ? ' — днём можно снять' : ''}`);
-  else if (emin >= -2) add('🧶', 'Утеплитель', 'тёплый свитер или флиска');
-  else add('🧶', 'Утеплитель', 'тёплый свитер, лучше шерстяной');
-
-  let outer = null;
-  if (emin >= 19) outer = wet ? 'не нужна — хватит зонта' : 'не нужна';
-  else if (emin >= 14) outer = wet ? 'лёгкая непромокаемая ветровка' : windy ? 'ветровка' : 'не нужна, разве что лёгкая ветровка на вечер';
-  else if (emin >= 9) outer = wet ? 'непромокаемая куртка или плащ' : windy ? 'ветровка или лёгкая куртка' : 'лёгкая куртка';
-  else if (emin >= 3) outer = wet ? 'непромокаемая демисезонная куртка' : 'демисезонная куртка';
-  else if (emin >= -5) outer = wet && !snow.length ? 'тёплая непромокаемая куртка' : 'тёплая куртка';
-  else if (emin >= -15) outer = 'зимняя куртка или пуховик';
-  else outer = 'тёплый пуховик подлиннее';
-  if (windy && emin < 14 && !/ветровк/.test(outer)) outer += ', непродуваемая';
-  add('🧥', 'Верхняя', outer);
-
-  if (emax >= 24) add('👖', 'Низ', 'шорты, юбка или лёгкие брюки');
-  else if (emax >= 18) add('👖', 'Низ', 'лёгкие брюки или джинсы');
-  else if (emin >= 0) add('👖', 'Низ', 'джинсы или брюки');
-  else if (emin >= -10) add('👖', 'Низ', 'плотные джинсы или брюки, в мороз — с термобельём');
-  else add('👖', 'Низ', 'утеплённые брюки или термобельё под джинсы');
-
-  if (snow.length || emin < -3) add('🥾', 'Обувь', ice ? 'зимняя, с нескользящей подошвой' : 'зимняя, тёплая');
-  else if (wet) add('🥾', 'Обувь', 'закрытая и непромокаемая — не замшевая, будут лужи');
-  else if (ice) add('🥾', 'Обувь', 'с нескользящей подошвой');
-  else if (emax >= 24) add('👡', 'Обувь', 'лёгкая или открытая — можно сандалии');
-  else add('👟', 'Обувь', emin < 8 ? 'закрытая, потеплее' : 'кроссовки или закрытая обувь');
-
-  const acc = [];
-  if (emin < -10) acc.push('тёплая шапка, шарф, варежки — прикройте лицо');
-  else if (emin < 0) acc.push('шапка, шарф и перчатки');
-  else if (emin < 5) acc.push(windy ? 'шапка — ветер холодный' : 'шапка не помешает');
-  if (uv >= 6) acc.push('солнцезащитные очки и кепка');
-  else if (emax >= 25 && !wet) acc.push('кепка или панама');
-  if (windy && wet && emin >= 0) acc.push('капюшон — зонт может вывернуть');
-  if (acc.length) add('🧣', 'Аксессуары', acc.join('; '));
-
-  const carry = [];
-  if (rain.length) carry.push(`☂️ зонт — дождь ${rangesText(rain)}${rainPop ? ` (${rainPop}%)` : ''}`);
-  else if (maybeRain) carry.push('☂️ складной зонт — возможен дождь');
-  if (swing && emin < 18) carry.push(`🎒 слой, который легко снять: утром и вечером на ${Math.round(emax - emin)}° холоднее`);
-  if (uv >= 6) carry.push(`🧴 солнцезащитный крем — УФ до ${Math.round(uv)}`);
-  if (emax >= 27) carry.push('💧 вода');
-
-  const alerts = [];
-  if (storm.length) alerts.push(`⛈ Гроза ${rangesText(storm)} — лучше переждать в помещении`);
-  if (ice) alerts.push('🧊 Возможен гололёд — осторожно на ступеньках и тротуарах');
-  if (gust >= 15) alerts.push(`💨 Сильный ветер, порывы до ${Math.round(gust)} м/с`);
-  if (emax >= 30) alerts.push('🔥 Жара — пейте воду, в 12–16 лучше в тени');
-  if (emin <= -20) alerts.push('🥶 Сильный мороз — не задерживайтесь на улице надолго');
-
   const notes = [];
-  if (rain.length) notes.push(`🌧 дождь ${rangesText(rain)}`);
+  if (rain.length) notes.push(`🌧 дождь ${rangesText(rain)}${rainPop ? ` (${rainPop}%)` : ''}`);
   else if (maybeRain) notes.push('🌦 возможен дождь');
   if (snow.length) notes.push(`🌨 снег ${rangesText(snow)}`);
   if (windy) notes.push(`💨 ветер до ${Math.round(Math.max(wind, gust * 0.7))} м/с`);
   if (uv >= 6) notes.push(`☀️ УФ ${Math.round(uv)}`);
 
-  // Погода к делам дня: дождь в это время или заметно холоднее/теплее, чем днём
-  const mid = (emin + emax) / 2;
+  const alerts = [];
+  if (storm.length) alerts.push(`⛈ Гроза ${rangesText(storm)}`);
+  if (ice) alerts.push('🧊 Возможен гололёд');
+  if (gust >= 15) alerts.push(`💨 Сильный ветер, порывы до ${Math.round(gust)} м/с`);
+  if (day.tmax >= 30) alerts.push(`🔥 Жара до ${fmtTemp(day.tmax)}`);
+  if (day.tmin <= -20) alerts.push(`🥶 Сильный мороз до ${fmtTemp(day.tmin)}`);
+
+  // Погода к делам дня: дождь в это время, гроза, заметно холоднее или теплее, чем днём
+  const mid = (day.fmin + day.fmax) / 2;
   const evNotes = events.filter((e) => e.start).map((e) => {
     const hh = +e.start.slice(0, 2);
     if (nowHour != null && hh < nowHour) return null;
     const x = all.find((y) => y.h === hh);
     if (!x) return null;
-    const notesE = [];
-    if (isRainHour(x)) notesE.push(`попадает на дождь (${x.pop}%)`);
-    else if (isSnowHour(x)) notesE.push('попадает на снег');
-    if (wxKind(x.code) === 'storm') notesE.push('гроза');
-    if (x.f + offset <= mid - 4) notesE.push('будет холоднее, чем днём');
-    else if (x.f + offset >= mid + 4) notesE.push('будет теплее');
-    if (x.gust >= 12) notesE.push('сильный ветер');
-    return { time: e.start, title: e.title, temp: x.t, icon: isRainHour(x) ? '🌧' : wxIcon(x.code, x.day), note: notesE.join(', ') };
-  }).filter(Boolean).sort((a, b) => a.time.localeCompare(b.time));
-
-  // Коротко — для push, сводки и Telegram: «демисезонная куртка, худи; зонт»
-  const pick = (label) => layers.find((l) => l.label === label)?.text;
-  const shortParts = [];
-  const o = pick('Верхняя');
-  if (o && !/^не нужна/.test(o)) shortParts.push(o.split(/[,—]/)[0].trim());
-  const m = pick('Утеплитель');
-  if (m) shortParts.push(m.split(/[,—]/)[0].trim());
-  if (!shortParts.length) shortParts.push(pick('Верх'));
-  if (rain.length || maybeRain) shortParts.push('зонт');
-  if (snow.length || emin < 0) shortParts.push('шапка');
-  if (uv >= 6) shortParts.push('крем от солнца');
+    const n = [];
+    if (isRainHour(x)) n.push(`дождь (${x.pop}%)`);
+    else if (isSnowHour(x)) n.push('снег');
+    if (wxKind(x.code) === 'storm') n.push('гроза');
+    if (x.f <= mid - 4) n.push('холоднее, чем днём');
+    else if (x.f >= mid + 4) n.push('теплее, чем днём');
+    if (x.gust >= 12) n.push('сильный ветер');
+    return { time: e.start, title: e.title, temp: x.t, icon: isRainHour(x) ? '🌧' : wxIcon(x.code, x.day), note: n.join(', ') };
+  }).filter(Boolean).sort((p, q) => p.time.localeCompare(q.time));
 
   return {
-    key, from, to, offset,
+    key,
     icon: dayIcon(day), text: wxLabel(day.code),
-    temp: [tmin, tmax], feels: [fmin, fmax],
-    summary: `${fmtRange(tmin, tmax)}, ощущается ${fmtRange(fmin, fmax)}`,
-    notes, phases, layers, carry, alerts, events: evNotes,
-    short: shortParts.join(', '),
+    temp: [day.tmin, day.tmax], feels: [day.fmin, day.fmax],
+    summary: `${fmtRange(day.tmin, day.tmax)}, ощущается ${fmtRange(day.fmin, day.fmax)}`,
+    notes, phases, alerts, events: evNotes,
     rain: rain.length > 0, snow: snow.length > 0,
   };
 }
@@ -1364,41 +1279,6 @@ function weatherChange(today, tomorrow) {
   if (tomorrow.gust >= 15 && today.gust < 12) out.push('сильный ветер');
   if (tomorrow.tmin <= 0 && today.tmin > 0) out.push('заморозки');
   return out;
-}
-
-/* ---------- Ответы «Как было по одежде?» ---------- */
-
-/** Сдвиг «под себя» из настроек аккаунта: { wx_feel: 'cold'|'normal'|'hot', wx_adjust }. */
-function wxOffset(prefs) {
-  return (WX_FEEL[prefs?.wx_feel] || 0) + (+prefs?.wx_adjust || 0);
-}
-
-/**
- * Ответ на «Как было по одежде?» за день key → новые wx_log и wx_adjust.
- * Повторный ответ за тот же день заменяет прежний (и отменяет его поправку). Журнал — последние 120 дней.
- */
-function applyWeatherFeedback(prefs, key, answer) {
-  if (!(answer in WX_ANSWERS)) return null;
-  const log = Array.isArray(prefs?.wx_log) ? prefs.wx_log.filter((x) => x && x.d) : [];
-  const prev = log.find((x) => x.d === key);
-  const delta = WX_ANSWERS[answer] - (prev ? WX_ANSWERS[prev.a] || 0 : 0);
-  const adjust = Math.max(-WX_ADJUST_MAX, Math.min(WX_ADJUST_MAX, (+prefs?.wx_adjust || 0) + delta));
-  const next = [...log.filter((x) => x.d !== key), { d: key, a: answer }].sort((a, b) => a.d.localeCompare(b.d)).slice(-120);
-  return { wx_log: next, wx_adjust: adjust };
-}
-
-/** За последние days дней до key: сколько раз «в самый раз», «холодно», «жарко», «не был на улице». */
-function feedbackStats(log, key, days = 30) {
-  const from = new Date(`${key}T12:00:00Z`);
-  from.setUTCDate(from.getUTCDate() - days + 1);
-  const fromKey = from.toISOString().slice(0, 10);
-  const r = { ok: 0, cold: 0, hot: 0, in: 0, total: 0 };
-  for (const x of log || []) {
-    if (x.d < fromKey || x.d > key || !(x.a in r)) continue;
-    r[x.a] += 1;
-    if (x.a !== 'in') r.total += 1;
-  }
-  return r;
 }
 
 /**
@@ -1428,32 +1308,28 @@ function forecastAccuracy(json, todayKey) {
 
 /* ---------- Тексты для push, Telegram и сводки ---------- */
 
-/** Строка для утренней сводки: «🌦 +4…+11°, дождь 14–17 · куртка, худи, зонт». */
-function weatherLine(advice) {
-  if (!advice) return '';
-  const extra = advice.notes.filter((n) => /дождь|снег/.test(n)).map((n) => n.replace(/^\S+ /, ''));
-  return `${advice.icon} ${fmtRange(advice.temp[0], advice.temp[1])}${extra.length ? `, ${extra.join(', ')}` : ''} · ${advice.short}`;
+/** Строка для утренней сводки: «🌦 +4…+11°, дождь 14–17». */
+function weatherLine(w) {
+  if (!w) return '';
+  const extra = w.notes.filter((n) => /дождь|снег/.test(n)).map((n) => n.replace(/^\S+ /, ''));
+  return `${w.icon} ${fmtRange(w.temp[0], w.temp[1])}${extra.length ? `, ${extra.join(', ')}` : ''}`;
 }
 
-/** Совет полностью — строками (Telegram). */
-function adviceLines(advice) {
-  if (!advice) return [];
+/** Погода на день строками (Telegram). */
+function weatherLines(w) {
+  if (!w) return [];
   return [
-    `${advice.icon} ${advice.summary}${advice.notes.length ? ` · ${advice.notes.join(' · ')}` : ''}`,
-    advice.phases.length > 1 ? advice.phases.map((p) => `${p.label}: ${p.word} (${fmtTemp(p.temp)})${p.icon ? ` ${p.icon}` : ''}`).join(' → ') : '',
-    '',
-    ...advice.layers.map((l) => `${l.icon} ${l.label}: ${l.text}`),
-    ...(advice.carry.length ? ['', `С собой: ${advice.carry.map((c) => c.replace(/^\S+ /, '')).join('; ')}`] : []),
-    ...(advice.alerts.length ? ['', ...advice.alerts] : []),
-    ...(advice.events.filter((e) => e.note).length ? ['', ...advice.events.filter((e) => e.note).map((e) => `📅 ${e.time} ${e.title} — ${fmtTemp(e.temp)}, ${e.note}`)] : []),
-  ].filter((x, i, a) => x !== '' || (i > 0 && a[i - 1] !== ''));
+    `${w.icon} ${w.summary}${w.notes.length ? ` · ${w.notes.join(' · ')}` : ''}`,
+    w.phases.length > 1 ? w.phases.map((p) => `${p.label}: ${fmtTemp(p.temp)}${p.icon ? ` ${p.icon}` : ''}`).join(' → ') : '',
+    ...w.alerts,
+    ...w.events.filter((e) => e.note).map((e) => `📅 ${e.time} ${e.title} — ${fmtTemp(e.temp)}, ${e.note}`),
+  ].filter(Boolean);
 }
 
 if (typeof module !== 'undefined') {
   module.exports = {
-    WX_FEEL, WX_ANSWERS, WX_ANSWER_TEXT, wxKind, wxIcon, wxLabel, fmtTemp, fmtRange, weatherUrl, weatherAccuracyUrl, parseForecast, compactForecast,
-    geoDistance, tempColor, dayIcon, feelWord, outdoorWindow, clothingAdvice, weatherChange, wxOffset, applyWeatherFeedback, feedbackStats,
-    forecastAccuracy, weatherLine, adviceLines,
+    wxKind, wxIcon, wxLabel, fmtTemp, fmtRange, weatherUrl, weatherAccuracyUrl, parseForecast, compactForecast,
+    geoDistance, tempColor, dayIcon, feelWord, dayWeather, weatherChange, forecastAccuracy, weatherLine, weatherLines,
   };
 }
 
@@ -1722,8 +1598,7 @@ if (typeof module !== 'undefined') {
  *   savePrefsTz(userId, tz), digestPrefs() → [prefs], claimDigest(userId, key) → bool,
  *   inviteNotices() → [invite], clearInviteNotice(id, notify) → bool, answerInvite(id, userId, status) → bool,
  *   userItems(userId) → [{ kind, id, data }], insertItem(userId, kind, id, data), deleteItem(userId, kind, id),
- *   — погода (update-3.sql): weatherPrefs() → [prefs с местом и временем вечернего совета], claimWeather(userId, key) → bool,
- *   updatePrefs(userId, patch),
+ *   — погода (update-3.sql): weatherPrefs() → [prefs с местом и временем вечернего предупреждения], claimWeather(userId, key) → bool,
  * }
  * push(subscription, payloadString, vapid) → Response
  * telegram: { call(method, params) → result, download(fileId) → Uint8Array } | null — Bot API (токен бота знает только функция)
@@ -1733,7 +1608,7 @@ if (typeof module !== 'undefined') {
 
 /* global dueAlarms, nextAlarm, alarmText, generateVapidKeys, hmacSha256, b64url, iso, localParts, dayLabel, refreshAlarm,
    digestMessage, dayAgenda, agendaLine, phraseToItem, describePhraseItem, nextKey, DEFAULT_QUIET, snoozeFromText,
-   clothingAdvice, weatherChange, wxOffset, applyWeatherFeedback, weatherLine, adviceLines, fmtRange, WX_ANSWER_TEXT */
+   dayWeather, weatherChange, weatherLine, weatherLines */
 
 const ACTION_SNOOZE_MAX = 7 * 24 * 60;
 
@@ -1741,10 +1616,6 @@ const tgEscape = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&l
 const capitalizeRu = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const INVITE_ANSWERS = { a: 'accepted', m: 'maybe', d: 'declined' };
 const ANSWER_TEXT = { accepted: 'придёт ✓', maybe: 'может быть ?', declined: 'не сможет ✕' };
-const WX_BUTTONS = (key) => [
-  [{ text: '🥶 Холодно', callback_data: `w:${key}:cold` }, { text: '👌 В самый раз', callback_data: `w:${key}:ok` }, { text: '🥵 Жарко', callback_data: `w:${key}:hot` }],
-  [{ text: '🏠 Не был(а) на улице', callback_data: `w:${key}:in` }],
-];
 const VOICE_MAX_SECONDS = 60;
 
 function createReminderServer({ db, push, now = () => Date.now(), actionUrl, subject, telegram = null, weather = null, stt = null }) {
@@ -1936,7 +1807,7 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
       if (lh * 60 + lm - (hh * 60 + mm) > 180) continue;
       const { events, tasks } = await itemsOf(p.user_id);
       const fc = await forecastFor(p);
-      const m = digestMessage({ events, tasks, key: local.key, weather: weatherLine(adviceFor(fc, p, events, tasks, local.key, +local.hm.slice(0, 2))) });
+      const m = digestMessage({ events, tasks, key: local.key, weather: weatherLine(weatherFor(fc, events, tasks, local.key, +local.hm.slice(0, 2))) });
       const c = await contacts([p.user_id]);
       sent += await deliver(c, p.user_id, {
         push: { title: m.title, body: m.body, kind: 'digest', tag: `digest:${local.key}` },
@@ -1969,16 +1840,16 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
     return fc;
   }
 
-  /** Совет «что надеть» на день key с учётом дел этого дня (когда вы на улице) и сдвига «под себя». */
-  function adviceFor(fc, p, events, tasks, key, nowHour = null) {
+  /** Погода на день key, с погодой к делам этого дня. */
+  function weatherFor(fc, events, tasks, key, nowHour = null) {
     if (!fc) return null;
     const { items } = dayAgenda({ events, tasks, key });
-    return clothingAdvice(fc, key, { offset: wxOffset(p), events: items.filter((i) => i.start), nowHour });
+    return dayWeather(fc, key, { events: items.filter((i) => i.start), nowHour });
   }
 
   /**
-   * Раз в минуту: в вечернее время пользователя (по умолчанию 21:00) — «Как было по одежде сегодня?»
-   * и, если завтра заметно отличается от сегодня, совет на завтра. Один раз за вечер.
+   * Раз в минуту: в вечернее время пользователя (по умолчанию 21:00) — предупреждение, если завтра погода
+   * заметно другая, чем сегодня (на 5° холоднее или теплее, дождь, снег, гроза, сильный ветер). Один раз за вечер.
    */
   async function runWeather() {
     if (!db.weatherPrefs) return 0;
@@ -1992,47 +1863,20 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
       const [hh, mm] = p.wx_eve.split(':').map(Number);
       const [lh, lm] = local.hm.split(':').map(Number);
       if (lh * 60 + lm - (hh * 60 + mm) > 180) continue; // функция долго не работала — вечер прошёл
-      const ask = !(p.wx_log || []).some((x) => x.d === local.key);
       const fc = await forecastFor(p);
       const tomorrow = nextKey(local.key);
       const change = fc ? weatherChange(fc.days[local.key], fc.days[tomorrow]) : [];
-      if (!ask && !change.length) continue;
-      let advice = null;
-      if (change.length) {
-        const { events, tasks } = await itemsOf(p.user_id);
-        advice = adviceFor(fc, p, events, tasks, tomorrow);
-      }
-      const question = '👕 Как было по одежде сегодня?';
-      const head = advice ? `🌦 Завтра ${change.join(', ')}` : question;
+      if (!change.length) continue;
+      const { events, tasks } = await itemsOf(p.user_id);
+      const w = weatherFor(fc, events, tasks, tomorrow);
+      const head = `🌦 Завтра ${change.join(', ')}`;
       const c = await contacts([p.user_id]);
       sent += await deliver(c, p.user_id, {
-        push: {
-          title: head,
-          body: advice
-            ? `${fmtRange(advice.temp[0], advice.temp[1])} · ${advice.short}${ask ? `\n${question} Нажмите, чтобы ответить` : ''}`
-            : 'Нажмите и ответьте — советы подстроятся под вас',
-          kind: 'weather', day: local.key, tag: `weather:${local.key}`,
-        },
-        tg: {
-          text: [
-            ...(advice ? [`<b>${tgEscape(head)}</b>`, ...adviceLines(advice).map(tgEscape), ''] : []),
-            ...(ask ? [`<b>${question}</b>`, 'Ответ подстроит советы под вас.'] : []),
-          ].join('\n').trim(),
-          buttons: ask ? WX_BUTTONS(local.key) : null,
-        },
+        push: { title: head, body: weatherLine(w), kind: 'weather', day: tomorrow, tag: `weather:${tomorrow}` },
+        tg: { text: [`<b>${tgEscape(head)}</b>`, ...weatherLines(w).map(tgEscape)].join('\n') },
       });
     }
     return sent;
-  }
-
-  /** Ответ «Как было по одежде?» за день key: журнал и поправка «под себя». */
-  async function weatherFeedback(userId, key, answer) {
-    const p = (await db.prefsOf([userId]))[0] || { user_id: userId };
-    const before = +p.wx_adjust || 0;
-    const patch = applyWeatherFeedback(p, key, answer);
-    if (!patch || !db.updatePrefs) return null;
-    await db.updatePrefs(userId, patch);
-    return { before, after: patch.wx_adjust };
   }
 
   /** Всё, что функция делает раз в минуту. */
@@ -2121,7 +1965,7 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
     '• 24 октября в 10 защита проекта ! — в обратный отсчёт',
     '',
     '/today — дела на сегодня, /tomorrow — на завтра, /week — на неделю',
-    '/weather — погода и что надеть',
+    '/weather — погода на сегодня и завтра',
     '',
     '🎤 Можно и голосовым — до минуты.',
   ].join('\n');
@@ -2163,17 +2007,17 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
     const today = localParts(t, tz).key;
     const cmd = text.toLowerCase().replace(/@\w+$/, '');
     if (/^\/(start|help)$|^помощь$/.test(cmd)) return say(HELP);
-    if (/^\/weather$|^(погода|что надеть\??)$/.test(cmd)) {
+    if (/^\/weather$|^погода$/.test(cmd)) {
       const p = (await db.prefsOf([user]))[0];
       const fc = await forecastFor(p);
       if (!fc) return say('🌦 Погода пока не настроена: откройте календарь → «🌦 Погода» и разрешите геолокацию или выберите город.');
       const { events, tasks } = await itemsOf(user);
       const local = localParts(t, tz);
-      const todayAdvice = adviceFor(fc, p, events, tasks, today, +local.hm.slice(0, 2));
-      const tomorrowAdvice = adviceFor(fc, p, events, tasks, nextKey(today));
+      const todayW = weatherFor(fc, events, tasks, today, +local.hm.slice(0, 2));
+      const tomorrowW = weatherFor(fc, events, tasks, nextKey(today));
       return say([
-        ...(todayAdvice ? [`<b>Сегодня${p.wx_place ? ` · ${tgEscape(p.wx_place)}` : ''}</b>`, ...adviceLines(todayAdvice).map(tgEscape), ''] : []),
-        ...(tomorrowAdvice ? [`<b>Завтра</b>`, tgEscape(weatherLine(tomorrowAdvice))] : []),
+        ...(todayW ? [`<b>Сегодня${p.wx_place ? ` · ${tgEscape(p.wx_place)}` : ''}</b>`, ...weatherLines(todayW).map(tgEscape), ''] : []),
+        ...(tomorrowW ? [`<b>Завтра</b>`, tgEscape(weatherLine(tomorrowW))] : []),
       ].join('\n').trim() || '🌦 Прогноз на сегодня ещё не пришёл');
     }
     if (/^\/(today|tomorrow|week)$|^(сегодня|завтра|неделя)$/.test(cmd)) {
@@ -2218,13 +2062,6 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
       } else if (op === 'u') {
         await db.deleteItem(user, type, b);
         note = 'Отменено, удалил';
-      } else if (op === 'w') {
-        const r = await weatherFeedback(user, a, b);
-        if (!r) note = 'Не получилось записать ответ';
-        else {
-          const tip = r.after < r.before ? ' — буду советовать потеплее' : r.after > r.before ? ' — буду советовать полегче' : '';
-          note = `Записал: ${WX_ANSWER_TEXT[b]}${tip}`;
-        }
       } else if (op === 'i') {
         const status = INVITE_ANSWERS[b];
         const ok = status && (await db.answerInvite(a, user, status));
@@ -2283,7 +2120,7 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
         { command: 'today', description: 'Дела на сегодня' },
         { command: 'tomorrow', description: 'Дела на завтра' },
         { command: 'week', description: 'Дела на неделю' },
-        { command: 'weather', description: 'Погода и что надеть' },
+        { command: 'weather', description: 'Погода на сегодня и завтра' },
         { command: 'help', description: 'Что умеет бот' },
       ],
     });
@@ -2440,9 +2277,6 @@ const db = {
     const rows = await rest(`user_prefs?user_id=eq.${q(userId)}&or=(wx_sent.is.null,wx_sent.lt.${q(key)})`,
       { method: 'PATCH', body: { wx_sent: key }, prefer: 'return=representation' });
     return rows.length > 0;
-  },
-  async updatePrefs(userId, patch) {
-    await rest(`user_prefs?user_id=eq.${q(userId)}`, { method: 'PATCH', body: { ...patch, updated_at: new Date().toISOString() } });
   },
   async claimDigest(userId, key) {
     const rows = await rest(`user_prefs?user_id=eq.${q(userId)}&or=(digest_sent.is.null,digest_sent.lt.${q(key)})`,

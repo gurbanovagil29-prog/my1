@@ -17,8 +17,7 @@
  *   savePrefsTz(userId, tz), digestPrefs() → [prefs], claimDigest(userId, key) → bool,
  *   inviteNotices() → [invite], clearInviteNotice(id, notify) → bool, answerInvite(id, userId, status) → bool,
  *   userItems(userId) → [{ kind, id, data }], insertItem(userId, kind, id, data), deleteItem(userId, kind, id),
- *   — погода (update-3.sql): weatherPrefs() → [prefs с местом и временем вечернего совета], claimWeather(userId, key) → bool,
- *   updatePrefs(userId, patch),
+ *   — погода (update-3.sql): weatherPrefs() → [prefs с местом и временем вечернего предупреждения], claimWeather(userId, key) → bool,
  * }
  * push(subscription, payloadString, vapid) → Response
  * telegram: { call(method, params) → result, download(fileId) → Uint8Array } | null — Bot API (токен бота знает только функция)
@@ -28,7 +27,7 @@
 
 /* global dueAlarms, nextAlarm, alarmText, generateVapidKeys, hmacSha256, b64url, iso, localParts, dayLabel, refreshAlarm,
    digestMessage, dayAgenda, agendaLine, phraseToItem, describePhraseItem, nextKey, DEFAULT_QUIET, snoozeFromText,
-   clothingAdvice, weatherChange, wxOffset, applyWeatherFeedback, weatherLine, adviceLines, fmtRange, WX_ANSWER_TEXT */
+   dayWeather, weatherChange, weatherLine, weatherLines */
 
 const ACTION_SNOOZE_MAX = 7 * 24 * 60;
 
@@ -36,10 +35,6 @@ const tgEscape = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&l
 const capitalizeRu = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const INVITE_ANSWERS = { a: 'accepted', m: 'maybe', d: 'declined' };
 const ANSWER_TEXT = { accepted: 'придёт ✓', maybe: 'может быть ?', declined: 'не сможет ✕' };
-const WX_BUTTONS = (key) => [
-  [{ text: '🥶 Холодно', callback_data: `w:${key}:cold` }, { text: '👌 В самый раз', callback_data: `w:${key}:ok` }, { text: '🥵 Жарко', callback_data: `w:${key}:hot` }],
-  [{ text: '🏠 Не был(а) на улице', callback_data: `w:${key}:in` }],
-];
 const VOICE_MAX_SECONDS = 60;
 
 function createReminderServer({ db, push, now = () => Date.now(), actionUrl, subject, telegram = null, weather = null, stt = null }) {
@@ -231,7 +226,7 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
       if (lh * 60 + lm - (hh * 60 + mm) > 180) continue;
       const { events, tasks } = await itemsOf(p.user_id);
       const fc = await forecastFor(p);
-      const m = digestMessage({ events, tasks, key: local.key, weather: weatherLine(adviceFor(fc, p, events, tasks, local.key, +local.hm.slice(0, 2))) });
+      const m = digestMessage({ events, tasks, key: local.key, weather: weatherLine(weatherFor(fc, events, tasks, local.key, +local.hm.slice(0, 2))) });
       const c = await contacts([p.user_id]);
       sent += await deliver(c, p.user_id, {
         push: { title: m.title, body: m.body, kind: 'digest', tag: `digest:${local.key}` },
@@ -264,16 +259,16 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
     return fc;
   }
 
-  /** Совет «что надеть» на день key с учётом дел этого дня (когда вы на улице) и сдвига «под себя». */
-  function adviceFor(fc, p, events, tasks, key, nowHour = null) {
+  /** Погода на день key, с погодой к делам этого дня. */
+  function weatherFor(fc, events, tasks, key, nowHour = null) {
     if (!fc) return null;
     const { items } = dayAgenda({ events, tasks, key });
-    return clothingAdvice(fc, key, { offset: wxOffset(p), events: items.filter((i) => i.start), nowHour });
+    return dayWeather(fc, key, { events: items.filter((i) => i.start), nowHour });
   }
 
   /**
-   * Раз в минуту: в вечернее время пользователя (по умолчанию 21:00) — «Как было по одежде сегодня?»
-   * и, если завтра заметно отличается от сегодня, совет на завтра. Один раз за вечер.
+   * Раз в минуту: в вечернее время пользователя (по умолчанию 21:00) — предупреждение, если завтра погода
+   * заметно другая, чем сегодня (на 5° холоднее или теплее, дождь, снег, гроза, сильный ветер). Один раз за вечер.
    */
   async function runWeather() {
     if (!db.weatherPrefs) return 0;
@@ -287,47 +282,20 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
       const [hh, mm] = p.wx_eve.split(':').map(Number);
       const [lh, lm] = local.hm.split(':').map(Number);
       if (lh * 60 + lm - (hh * 60 + mm) > 180) continue; // функция долго не работала — вечер прошёл
-      const ask = !(p.wx_log || []).some((x) => x.d === local.key);
       const fc = await forecastFor(p);
       const tomorrow = nextKey(local.key);
       const change = fc ? weatherChange(fc.days[local.key], fc.days[tomorrow]) : [];
-      if (!ask && !change.length) continue;
-      let advice = null;
-      if (change.length) {
-        const { events, tasks } = await itemsOf(p.user_id);
-        advice = adviceFor(fc, p, events, tasks, tomorrow);
-      }
-      const question = '👕 Как было по одежде сегодня?';
-      const head = advice ? `🌦 Завтра ${change.join(', ')}` : question;
+      if (!change.length) continue;
+      const { events, tasks } = await itemsOf(p.user_id);
+      const w = weatherFor(fc, events, tasks, tomorrow);
+      const head = `🌦 Завтра ${change.join(', ')}`;
       const c = await contacts([p.user_id]);
       sent += await deliver(c, p.user_id, {
-        push: {
-          title: head,
-          body: advice
-            ? `${fmtRange(advice.temp[0], advice.temp[1])} · ${advice.short}${ask ? `\n${question} Нажмите, чтобы ответить` : ''}`
-            : 'Нажмите и ответьте — советы подстроятся под вас',
-          kind: 'weather', day: local.key, tag: `weather:${local.key}`,
-        },
-        tg: {
-          text: [
-            ...(advice ? [`<b>${tgEscape(head)}</b>`, ...adviceLines(advice).map(tgEscape), ''] : []),
-            ...(ask ? [`<b>${question}</b>`, 'Ответ подстроит советы под вас.'] : []),
-          ].join('\n').trim(),
-          buttons: ask ? WX_BUTTONS(local.key) : null,
-        },
+        push: { title: head, body: weatherLine(w), kind: 'weather', day: tomorrow, tag: `weather:${tomorrow}` },
+        tg: { text: [`<b>${tgEscape(head)}</b>`, ...weatherLines(w).map(tgEscape)].join('\n') },
       });
     }
     return sent;
-  }
-
-  /** Ответ «Как было по одежде?» за день key: журнал и поправка «под себя». */
-  async function weatherFeedback(userId, key, answer) {
-    const p = (await db.prefsOf([userId]))[0] || { user_id: userId };
-    const before = +p.wx_adjust || 0;
-    const patch = applyWeatherFeedback(p, key, answer);
-    if (!patch || !db.updatePrefs) return null;
-    await db.updatePrefs(userId, patch);
-    return { before, after: patch.wx_adjust };
   }
 
   /** Всё, что функция делает раз в минуту. */
@@ -416,7 +384,7 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
     '• 24 октября в 10 защита проекта ! — в обратный отсчёт',
     '',
     '/today — дела на сегодня, /tomorrow — на завтра, /week — на неделю',
-    '/weather — погода и что надеть',
+    '/weather — погода на сегодня и завтра',
     '',
     '🎤 Можно и голосовым — до минуты.',
   ].join('\n');
@@ -458,17 +426,17 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
     const today = localParts(t, tz).key;
     const cmd = text.toLowerCase().replace(/@\w+$/, '');
     if (/^\/(start|help)$|^помощь$/.test(cmd)) return say(HELP);
-    if (/^\/weather$|^(погода|что надеть\??)$/.test(cmd)) {
+    if (/^\/weather$|^погода$/.test(cmd)) {
       const p = (await db.prefsOf([user]))[0];
       const fc = await forecastFor(p);
       if (!fc) return say('🌦 Погода пока не настроена: откройте календарь → «🌦 Погода» и разрешите геолокацию или выберите город.');
       const { events, tasks } = await itemsOf(user);
       const local = localParts(t, tz);
-      const todayAdvice = adviceFor(fc, p, events, tasks, today, +local.hm.slice(0, 2));
-      const tomorrowAdvice = adviceFor(fc, p, events, tasks, nextKey(today));
+      const todayW = weatherFor(fc, events, tasks, today, +local.hm.slice(0, 2));
+      const tomorrowW = weatherFor(fc, events, tasks, nextKey(today));
       return say([
-        ...(todayAdvice ? [`<b>Сегодня${p.wx_place ? ` · ${tgEscape(p.wx_place)}` : ''}</b>`, ...adviceLines(todayAdvice).map(tgEscape), ''] : []),
-        ...(tomorrowAdvice ? [`<b>Завтра</b>`, tgEscape(weatherLine(tomorrowAdvice))] : []),
+        ...(todayW ? [`<b>Сегодня${p.wx_place ? ` · ${tgEscape(p.wx_place)}` : ''}</b>`, ...weatherLines(todayW).map(tgEscape), ''] : []),
+        ...(tomorrowW ? [`<b>Завтра</b>`, tgEscape(weatherLine(tomorrowW))] : []),
       ].join('\n').trim() || '🌦 Прогноз на сегодня ещё не пришёл');
     }
     if (/^\/(today|tomorrow|week)$|^(сегодня|завтра|неделя)$/.test(cmd)) {
@@ -513,13 +481,6 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
       } else if (op === 'u') {
         await db.deleteItem(user, type, b);
         note = 'Отменено, удалил';
-      } else if (op === 'w') {
-        const r = await weatherFeedback(user, a, b);
-        if (!r) note = 'Не получилось записать ответ';
-        else {
-          const tip = r.after < r.before ? ' — буду советовать потеплее' : r.after > r.before ? ' — буду советовать полегче' : '';
-          note = `Записал: ${WX_ANSWER_TEXT[b]}${tip}`;
-        }
       } else if (op === 'i') {
         const status = INVITE_ANSWERS[b];
         const ok = status && (await db.answerInvite(a, user, status));
@@ -578,7 +539,7 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
         { command: 'today', description: 'Дела на сегодня' },
         { command: 'tomorrow', description: 'Дела на завтра' },
         { command: 'week', description: 'Дела на неделю' },
-        { command: 'weather', description: 'Погода и что надеть' },
+        { command: 'weather', description: 'Погода на сегодня и завтра' },
         { command: 'help', description: 'Что умеет бот' },
       ],
     });
