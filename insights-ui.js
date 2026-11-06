@@ -287,7 +287,7 @@ function initSlots() {
 function quickSlotQuery(text) {
   const q = parseSlotQuery(text, today());
   if (!q) return null;
-  // «найди 2 часа с Аней» — общее окно с другом, чей календарь вам виден
+  // «найди 2 часа с Мишей» — общее окно с другом, чей календарь вам виден
   let friend = null;
   for (const m of String(text).matchAll(/(?:^|\s)со? ([А-Яа-яЁёA-Za-z-]{2,})/g)) friend ||= layerByName(m[1]);
   return { ...q, with: friend?.key || null, window: q.window && [Math.max(0, q.window[0]), Math.min(1440, q.window[1])] };

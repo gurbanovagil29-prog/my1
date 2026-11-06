@@ -56,7 +56,7 @@ const stt = GROQ_KEY || OPENAI_KEY ? {
     form.append('model', model);
     form.append('language', 'ru');
     // Подсказка: так числа чаще пишутся цифрами
-    form.append('prompt', 'Завтра в 15:00 встреча с Аней. 25 октября в 10:30 защита проекта. Напомни за 15 минут.');
+    form.append('prompt', 'Завтра в 15:00 встреча с Мишей. 25 октября в 10:30 защита проекта. Напомни за 15 минут.');
     const res = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: form });
     if (!res.ok) throw new Error(`speech-to-text: ${res.status} ${await res.text()}`);
     return (await res.json()).text || '';

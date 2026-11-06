@@ -103,7 +103,7 @@ function phraseToItem(text, { now, tz, calendars = [], events = [], quiet = DEFA
   };
 }
 
-/** Описание добавленного для ответа бота: «Встреча с Аней · завтра, 15:00–16:00 · Личное». */
+/** Описание добавленного для ответа бота: «Встреча с Мишей · завтра, 15:00–16:00 · Личное». */
 function describePhraseItem({ kind, item, cal, linkTitle }, now, tz, calName) {
   const name = calName || cal?.name || '';
   if (kind === 'event') {

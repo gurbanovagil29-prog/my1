@@ -234,7 +234,7 @@ function spokenNumbers(text) {
 }
 
 /**
- * Разбирает фразу вида «завтра в 15 встреча с Аней» или «по пятницам с 19 до 21 спортзал».
+ * Разбирает фразу вида «завтра в 15 встреча с Мишей» или «по пятницам с 19 до 21 спортзал».
  * Возвращает { title, date, endDate, spanDays, start, end, repeat, allDay, tag, priority, matched }:
  * endDate — последний день многодневного события («с пятницы до воскресенья», «на выходных»),
  * spanDays — длительность из «на 3 дня» (конец считается от даты начала), tag — метка категории из «#работа»,
@@ -1533,7 +1533,7 @@ function phraseToItem(text, { now, tz, calendars = [], events = [], quiet = DEFA
   };
 }
 
-/** Описание добавленного для ответа бота: «Встреча с Аней · завтра, 15:00–16:00 · Личное». */
+/** Описание добавленного для ответа бота: «Встреча с Мишей · завтра, 15:00–16:00 · Личное». */
 function describePhraseItem({ kind, item, cal, linkTitle }, now, tz, calName) {
   const name = calName || cal?.name || '';
   if (kind === 'event') {
@@ -1958,7 +1958,7 @@ function createReminderServer({ db, push, now = () => Date.now(), actionUrl, sub
 
   const HELP = [
     'Пишите фразы, как в строке календаря:',
-    '• завтра в 15 встреча с Аней',
+    '• завтра в 15 встреча с Мишей',
     '• по пятницам в 19 спортзал #личное',
     '• позвонить маме, напоминай каждый час',
     '• сделать проект в четверг с 19 до 23 @защита',
@@ -2201,7 +2201,7 @@ const stt = GROQ_KEY || OPENAI_KEY ? {
     form.append('model', model);
     form.append('language', 'ru');
     // Подсказка: так числа чаще пишутся цифрами
-    form.append('prompt', 'Завтра в 15:00 встреча с Аней. 25 октября в 10:30 защита проекта. Напомни за 15 минут.');
+    form.append('prompt', 'Завтра в 15:00 встреча с Мишей. 25 октября в 10:30 защита проекта. Напомни за 15 минут.');
     const res = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: form });
     if (!res.ok) throw new Error(`speech-to-text: ${res.status} ${await res.text()}`);
     return (await res.json()).text || '';
