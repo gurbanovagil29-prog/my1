@@ -30,7 +30,7 @@ function voiceHint() {
 function setVoiceUi(on) {
   $('#quickVoice').classList.toggle('is-listening', on);
   $('#quickVoice').setAttribute('aria-pressed', String(on));
-  if (on) $('#quickInput').placeholder = 'Говорите… например: «завтра в 15 встреча с Аней»';
+  if (on) $('#quickInput').placeholder = 'Говорите… например: «завтра в 15 встреча с Мишей»';
   else renderQuickMode();
   syncQuickButtons();
 }

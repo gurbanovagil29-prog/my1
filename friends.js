@@ -348,7 +348,7 @@ function openShareEditor(share = null, kind = 'friend') {
   $('#shEmail').value = share?.email || '';
   $('#shEmail').required = isFriend;
   $('#shLabel').value = share?.label || '';
-  $('#shLabel').placeholder = isFriend ? 'Аня' : 'Для группы';
+  $('#shLabel').placeholder = isFriend ? 'Миша' : 'Для группы';
   $('#shNotes').checked = s.notes;
   $('#shDelete').hidden = !share;
   $('#shLink').hidden = !share || isFriend;
@@ -512,7 +512,7 @@ function friendPeople() {
   return [...people].map(([id, p]) => ({ id, ...p }));
 }
 
-/** Слой для совместного поиска окна: «с Аней» → ключ слоя. */
+/** Слой для совместного поиска окна: «с Мишей» → ключ слоя. */
 function layerByName(word) {
   return (state.layers || []).find((l) => !l.error && nameMatches(word, l.name)) || null;
 }

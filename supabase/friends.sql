@@ -15,7 +15,7 @@ create table if not exists public.shares (
   accepted boolean not null default false,
   -- Ссылка: секретный адрес; кто его знает, тот видит календарь (без входа в аккаунт)
   token text not null unique default replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''),
-  label text not null default '',      -- подпись для владельца: «Аня», «Ссылка для группы»
+  label text not null default '',      -- подпись для владельца: «Миша», «Ссылка для группы»
   owner_name text not null default '', -- как владелец подписан у друга
   -- { "default": "busy", "cals": { "<id категории>": "hidden" | "busy" | "details" }, "tasks": "busy", "notes": false }
   settings jsonb not null default '{}'::jsonb,

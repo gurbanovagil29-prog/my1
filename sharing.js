@@ -74,7 +74,7 @@ function buildLayer(rows, key) {
   return { ownerName, cals, events: out };
 }
 
-/** «Аней», «с Машей» → подходит ли к имени «Аня», «Маша»: сравниваем по основе слова. */
+/** «Мишей», «с Машей» → подходит ли к имени «Миша», «Маша»: сравниваем по основе слова. */
 function nameMatches(word, name) {
   const norm = (s) => String(s).toLowerCase().replace(/ё/g, 'е');
   const w = norm(word);
