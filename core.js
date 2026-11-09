@@ -506,7 +506,8 @@ function parseQuick(input, base = today()) {
   take(`(?:(во?|до|к|в следующ(?:ий|ую|ее)|в эт(?:от|у|о)) )?(${WD_WORDS})`, (m) => {
     const wd = weekdayFromWord(m[2]);
     if (m[1] && /след/i.test(m[1])) setDate(nextWeekday(addDays(startOfWeek(base), 7), wd));
-    else setDate(nextWeekday(base, wd));
+    else if (m[1] && /эт/i.test(m[1])) setDate(nextWeekday(base, wd)); // «в этот вторник» во вторник — сегодня
+    else setDate(nextWeekday(addDays(base, 1), wd)); // «вторник» во вторник — следующий
   });
 
   // Время без предлога: «15:30»
